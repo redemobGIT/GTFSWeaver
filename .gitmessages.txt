@@ -1,0 +1,72 @@
+# ---------------------------------------------------------
+# 🧵 GTFSWeaver Commit Template
+# ---------------------------------------------------------
+# Commit message format (Conventional Commits):
+#
+# <type>(optional scope): <short summary>
+#
+# [blank line]
+# <detailed body>
+#
+# [blank line]
+# <footer>
+#
+# ---------------------------------------------------------
+# 💡 Common types:
+#   feat      →  a new feature
+#   fix       →  a bug fix
+#   refactor  →  code restructuring, no behavior change
+#   docs      →  documentation changes only
+#   style     →  formatting, naming, imports, whitespace
+#   test      →  add or modify tests
+#   build     →  packaging, dependencies, CI/CD configs
+#   chore     →  maintenance tasks or meta changes
+#   perf      →  performance improvements
+#
+# Common scopes:
+#   protofeed, validators, main, routing, constants, docs, cli
+#
+# Example:
+#   feat(protofeed): add timetable.csv parser (Option A)
+#
+# ---------------------------------------------------------
+# The first line is the subject line:
+#   * limit to 72 characters
+#   * use imperative mood ("add", "fix", "refactor", not "added")
+#   * no period at the end
+# ---------------------------------------------------------
+
+# <type>(scope): <summary>
+# ---------------------------------------------------------
+
+# Example:
+# feat(validators): add timetable schema and validation
+
+# ---------------------------------------------------------
+# BODY: Explain WHAT and WHY (not HOW)
+# Wrap lines at ~72 characters.
+# Describe the motivation, context, and impact.
+# Mention major design decisions or side effects.
+# ---------------------------------------------------------
+
+# Example:
+# Introduces schema validation for timetable.csv (Option A).
+# Validates required fields (dow, start_time, end_time, headway_min)
+# and cross-checks shape_id with lines.geojson.
+#
+# Removes legacy service_windows.csv parsing in favor of unified model.
+
+# ---------------------------------------------------------
+# FOOTER: References and breaking changes
+# Use to close issues or describe breaking API changes.
+# ---------------------------------------------------------
+
+# Closes #42
+# BREAKING CHANGE: renamed field frequency → headway_min
+
+# ---------------------------------------------------------
+# Tips:
+#   * Keep commits atomic (one logical change per commit)
+#   * Use rebase or squash before merging to keep history clean
+#   * Run tests before committing
+# ---------------------------------------------------------
