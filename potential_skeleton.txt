@@ -1,0 +1,54 @@
+gtfsweaver/
+  pyproject.toml
+  README.md
+  LICENSE
+  .gitignore
+  ruff.toml
+  mypy.ini
+  tests/
+
+  src/
+    gtfsweaver/
+      __init__.py
+      api.py                  # single entry points: load/validate/build/export
+
+      errors.py               # domain errors with context (file/row/col)
+      log.py                  # structured warnings (optional)
+
+      models/
+        __init__.py
+        meta.py               # agency + validity window + timezone
+        options.py            # defaults, inference knobs
+        service_plan.py       # CANONICAL intermediate model (unifies both inputs)
+        protofeed.py          # shapes + service_plan + optional zones/stops + service_area
+
+      io/
+        __init__.py
+        detect.py             # detect input style: "detailed" vs "service_summary"
+        detailed.py           # load make_gtfs-like directory -> canonical ServicePlan
+        service_summary.py    # load aggregated service table -> canonical ServicePlan
+        tables.py             # parsing helpers (pt-BR numbers, currency, durations)
+        geom.py               # read vector from geojson/gpkg/shp/...
+        kml.py                # KML/KMZ read + normalization
+
+      geo/
+        __init__.py
+        crs.py                # ensure_wgs84, to_utm
+        service_area.py       # metric buffer service_area
+
+      validate/
+        __init__.py
+        protofeed.py          # orchestrates validations (aggregates issues)
+        speed_zones.py        # ENFORCED validation
+
+      build/
+        __init__.py
+        calendar.py           # calendar.txt (+ optional calendar_dates.txt)
+        routes.py             # routes.txt
+        shapes.py             # shapes.txt
+        trips.py              # trips.txt
+        frequencies.py        # frequencies.txt (core for service_summary)
+        stops.py              # stops.txt (provided or synthesized)
+        stop_times.py         # stop_times.txt (provided or derived)
+        fares.py              # fare_attributes.txt (+ optional fare_rules.txt)
+        export.py             # write_gtfs_zip
