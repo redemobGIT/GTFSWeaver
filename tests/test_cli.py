@@ -5,9 +5,9 @@ import pytest
 import click.testing
 from click.testing import CliRunner
 
-from .context import make_gtfs, DATA_DIR
-from make_gtfs import *
-from make_gtfs.cli import *
+from .context import GTFSWeaver, DATA_DIR
+from GTFSWeaver import *
+from GTFSWeaver.cli import *
 
 
 runner = CliRunner()
@@ -33,12 +33,12 @@ def test_make_gtfs():
     t2_path = DATA_DIR / "bingo"
     rm_paths(t1_path, t2_path)
 
-    result = runner.invoke(make_gtfs, [str(s_path), str(t1_path)])
+    result = runner.invoke(GTFSWeaver, [str(s_path), str(t1_path)])
     assert result.exit_code == 0
     assert t1_path.exists()
     assert t1_path.is_file()
 
-    result = runner.invoke(make_gtfs, [str(s_path), str(t2_path)])
+    result = runner.invoke(GTFSWeaver, [str(s_path), str(t2_path)])
     assert result.exit_code == 0
     assert t2_path.exists()
     assert t2_path.is_dir()

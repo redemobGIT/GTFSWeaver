@@ -1,5 +1,5 @@
 [project]
-name = "make-gtfs"
+name = "gtfsweaver"
 version = "4.1.1"
 description = "A Python 3.10+ library to build GTFS feeds from basic route information."
 requires-python = ">=3.10"
@@ -17,33 +17,9 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.setuptools]
-packages = ["make_gtfs"]
+[tool.hatch.build.targets.wheel]
+packages = ["GTFSWeaver"]
+
 
 [project.scripts]
-make_gtfs = "make_gtfs.cli:make_gtfs"
-
-[tool.uv]
-dev-dependencies = [
-    "pytest>=6.2.5",
-    "jupyter>=1.0.0",
-    "pre-commit-uv>=0",
-    "Sphinx>=5.0.2",
-    "publish-sphinx-docs>=1.0.3",
-    "black>=22",
-    "ruff>=0.0.259",
-    "nbstripout>=0.6.1",
-]
-
-[tool.pytest.ini_options]
-markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "serial",
-]
-
-[tool.ruff]
-# Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.
-lint.select = ["E", "F"]
-lint.ignore = ["E501", "E731", "F401", "F403"]
-exclude = ["*.ipynb"]
-
+gtfsweaver = "GTFSWeaver.cli:make_gtfs"

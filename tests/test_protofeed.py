@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
-from .context import make_gtfs, DATA_DIR
-import make_gtfs as mg
+from .context import GTFSWeaver, DATA_DIR
+import GTFSWeaver as mg
 
 
 pfeed = mg.read_protofeed(DATA_DIR / "auckland")

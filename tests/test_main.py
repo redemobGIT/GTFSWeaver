@@ -5,8 +5,8 @@ import geopandas as gpd
 import numpy as np
 import pytest
 
-from .context import make_gtfs, DATA_DIR
-import make_gtfs as mg
+from .context import GTFSWeaver, DATA_DIR
+import GTFSWeaver as mg
 
 
 # Load test ProtoFeed

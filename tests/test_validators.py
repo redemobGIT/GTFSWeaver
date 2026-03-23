@@ -1,8 +1,8 @@
 import pandera as pa
 import pandas as pd
 
-from .context import make_gtfs, DATA_DIR, pytest
-import make_gtfs as mg
+from .context import GTFSWeaver, DATA_DIR, pytest
+import GTFSWeaver as mg
 
 
 # Load test ProtoFeed
