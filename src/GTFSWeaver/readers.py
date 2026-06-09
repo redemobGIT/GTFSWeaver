@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 from . import constants as cs
-from .models import Direction, ProtoFeed, _make_shape_ids, make_route_id
+from .models import Direction, ProtoFeed, make_shape_ids, make_route_id
 from .models import parse_service_pattern
 from .validators import validate_excel_tables, validate_speed_zones_gdf
 from .validators import validate_tables
@@ -251,7 +251,7 @@ def _prepare_routes_data(routes_df: pd.DataFrame) -> pd.DataFrame:
     df = routes_df.copy()
 
     # Generate compound shape IDs (removes this hidden logic from downstream)
-    df = _make_shape_ids(df)
+    df = make_shape_ids(df)
 
     # Wire up the orphaned inference logic!
     df = _infer_schedule_type(df)
@@ -319,7 +319,11 @@ def _read_companion_geo_files(
         source_crs,
     )
     stops = _load_and_stage_geo(
-        stops_geo_path, stops_layer, stops_geo_column_map, "Stops geofile", source_crs
+        stops_geo_path,
+        stops_layer,
+        stops_geo_column_map,
+        "Stops geofile",
+        source_crs,
     )
     speed_zones = _load_and_stage_geo(
         speed_zones_path,
@@ -682,6 +686,7 @@ def _resolve_crs(
 # Shared cleaning and validation helpers
 # -----------------------------------------------------------------------------
 
+
 def _strip_object_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Trim whitespace and convert common empty-string markers to NA."""
     df = df.copy()
@@ -734,7 +739,7 @@ def _shape_table_from_gdf(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     out = gdf.copy()
 
     if "shape_id" not in out.columns:
-        out = _make_shape_ids(out)
+        out = make_shape_ids(out)
 
     return out[["shape_id", "geometry"]]
 

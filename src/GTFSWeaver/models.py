@@ -1,13 +1,13 @@
 """
-Domain models: ProtoFeed, TripKey, Direction, parse_service_pattern.
+Domain models: ProtoFeed, Direction, and identity generators.
 """
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import IntEnum
 from functools import cached_property
-from typing import NamedTuple
 
 import geopandas as gpd
 import numpy as np
@@ -16,155 +16,7 @@ import shapely.geometry as sg
 
 from . import constants as cs
 
-# ── Direction ────────────────────────────────────────────────────────
-
-
-class Direction(IntEnum):
-    FORWARD = 0
-    REVERSE = 1
-    BOTH = 2
-
-    @classmethod
-    def from_label(cls, label: str | int) -> Direction:
-        """Parse from int, digit string, or PT/EN label."""
-        if isinstance(label, (int, np.integer)):
-            return cls(int(label))
-        key = str(label).strip().lower()
-        mapping = {
-            "inbound": cls.FORWARD,
-            "ida": cls.FORWARD,
-            "outbound": cls.REVERSE,
-            "volta": cls.REVERSE,
-            "both": cls.BOTH,
-            "0": cls.REVERSE,
-            "1": cls.FORWARD,
-            "2": cls.BOTH,
-        }
-        if key in mapping:
-            return mapping[key]
-        raise ValueError(
-            f"Invalid direction '{label}'. " f"Expected: 0/1/2, inbound/outbound/both."
-        )
-
-
-# ── Service pattern ──────────────────────────────────────────────────
-
-
-def parse_service_pattern(pattern: str) -> tuple[tuple[int, ...], bool]:
-    """
-    Convert a service pattern label to (weekday_bits, holiday_flag).
-
-    Predefined: DU, SAB, DOM, FER, DU_SAB, TODOS.
-    Custom: 7-digit bitstring (``"1010100"``) or comma-separated
-    day names (``"mon,wed,fri"``).
-    """
-    key = pattern.strip().upper()
-    if key in cs.SERVICE_PATTERNS:
-        return cs.SERVICE_PATTERNS[key]
-
-    # TODO: Below is legacy and will likely be removed once we fully switch to
-    # service profiles, but it can stay for now since it's not harmful
-    # and allows some flexibility in user input.
-    if len(key) == 7 and set(key).issubset({"0", "1"}):
-        return tuple(int(c) for c in key), False
-
-    # Comma-separated days (e.g., "mon, wed, fri")
-    valid_days = {day[:3].upper() for day in cs.WEEKDAYS}
-    user_days = {p.strip()[:3] for p in key.split(",")}
-
-    if user_days.issubset(valid_days):
-        bits = tuple(1 if day[:3].upper() in user_days else 0 for day in cs.WEEKDAYS)
-        return bits, False
-
-    raise ValueError(
-        f"Invalid service_pattern '{pattern}'. "
-        f"Expected predefined key ({', '.join(cs.SERVICE_PATTERNS)}), "
-        "a 7-digit bitstring, or comma-separated days."
-    )
-
-
-# TODO: incorporate this on pipeflow side and use it to infer holiday behavior in the absence of a holidays table
-def holiday_action_from_pattern(pattern: str) -> str:
-    """
-    Map a service pattern to holiday behavior.
-
-    Returns:
-        "add"    -> service is ADDED on holidays
-        "remove" -> service is REMOVED on holidays
-        "none"   -> holidays do not alter the weekly pattern
-    """
-    key = str(pattern).strip().upper()
-
-    if key in {"DOM", "FER"}:
-        return "add"
-
-    if key in {"DU", "SAB", "DU_SAB"}:
-        return "remove"
-
-    if key == "TODOS":
-        return "none"
-
-    # conservative default for custom bitstrings / day lists
-    return "none"
-
-
-# ── ID helpers ───────────────────────────────────────────────────────
-
-
-def _make_shape_ids(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Generate a shape_id from route name and direction.
-
-    Any hyphens in the route name are replaced with underscores to
-    keep ``cs.SEP`` unambiguous in compound IDs.
-    """
-    clean_short_name = (
-        df["route_short_name"].astype(str).str.replace(cs.SEP, "_", regex=False)
-    )
-
-    return df.assign(
-        route_short_name=clean_short_name,
-        shape_id=clean_short_name + cs.SEP + df["direction"].astype(str),
-    )
-
-
-def make_route_id(route_short_name: str | int) -> str:
-    """Generate a route_id, sanitised for use in compound IDs."""
-    return "r" + str(route_short_name).replace(cs.SEP, "_")
-
-
-# ── TripKey ──────────────────────────────────────────────────────────
-
-
-class TripKey(NamedTuple):
-    route_id: str
-    service_profile_id: str
-    start_time: str
-    direction: int
-    sequence: int
-
-    def to_trip_id(self) -> str:
-        return cs.SEP.join(
-            [
-                "t",
-                self.route_id,
-                self.service_profile_id,
-                self.start_time,
-                str(self.direction),
-                str(self.sequence),
-            ]
-        )
-
-    @classmethod
-    def from_trip_id(cls, trip_id: str) -> TripKey:
-        parts = trip_id.split(cs.SEP)
-        if len(parts) != 6 or parts[0] != "t":
-            raise ValueError(f"Malformed trip_id: '{trip_id}'")
-        _, route, profile, start, direction, seq = parts
-        return cls(route, profile, start, int(direction), int(seq))
-
-
-# ── ProtoFeed ────────────────────────────────────────────────────────
+# ── Core Domain Models ───────────────────────────────────────────────
 
 
 @dataclass
@@ -272,6 +124,150 @@ class ProtoFeed:
             v = getattr(self, k)
             kw[k] = v.copy() if isinstance(v, (pd.DataFrame, gpd.GeoDataFrame)) else v
         return ProtoFeed(**kw)
+
+
+# ── Secondary Domain Models ──────────────────────────────────────────
+
+
+class Direction(IntEnum):
+    FORWARD = 0
+    REVERSE = 1
+    BOTH = 2
+
+    @classmethod
+    def from_label(cls, label: str | int) -> Direction:
+        """Parse from int, digit string, or PT/EN label."""
+        if isinstance(label, (int, np.integer)):
+            return cls(int(label))
+        key = str(label).strip().lower()
+        mapping = {
+            "inbound": cls.FORWARD,
+            "ida": cls.FORWARD,
+            "outbound": cls.REVERSE,
+            "volta": cls.REVERSE,
+            "both": cls.BOTH,
+            "0": cls.REVERSE,
+            "1": cls.FORWARD,
+            "2": cls.BOTH,
+        }
+        if key in mapping:
+            return mapping[key]
+        raise ValueError(
+            f"Invalid direction '{label}'. " f"Expected: 0/1/2, inbound/outbound/both."
+        )
+
+
+# ── Identity Generators ──────────────────────────────────────────────
+
+
+def make_route_id(route_short_name: str | int) -> str:
+    """Generate a route_id, sanitised for use in compound IDs."""
+    return "r" + str(route_short_name).replace(cs.SEP, "_")
+
+
+def make_service_profile_id(
+    start_time: str | float, end_time: str | float, pattern: str
+) -> str:
+    """
+    Create a short, opaque, deterministic surrogate key for service profiles.
+
+    Generates a 6-character hash from the core attributes, eliminating
+    ugly colons and volatile times from the ID string.
+    """
+    raw_parts = [start_time, end_time, pattern]
+    clean_parts = [str(p).strip() for p in raw_parts if pd.notna(p) and p != ""]
+
+    sig = "|".join(clean_parts)
+    short_hash = hashlib.md5(sig.encode()).hexdigest()[:6]
+
+    return f"prf_{short_hash}"
+
+
+def make_trip_id(route_id: str, direction: int, sequence: int) -> str:
+    """Generate a unique, dumb surrogate key for a trip."""
+    return f"t_{route_id}_{direction}_{sequence}"
+
+
+# ── Public API Helpers ───────────────────────────────────────────────
+
+
+def parse_service_pattern(pattern: str) -> tuple[tuple[int, ...], bool]:
+    """
+    Convert a service pattern label to (weekday_bits, holiday_flag).
+
+    Predefined: DU, SAB, DOM, FER, DU_SAB, TODOS.
+    Custom: 7-digit bitstring (``"1010100"``) or comma-separated
+    day names (``"mon,wed,fri"``).
+    """
+    key = pattern.strip().upper()
+    if key in cs.SERVICE_PATTERNS:
+        return cs.SERVICE_PATTERNS[key]
+
+    # TODO: Below is legacy and will likely be removed once we fully switch to
+    # service profiles, but it can stay for now since it's not harmful
+    # and allows some flexibility in user input.
+    if len(key) == 7 and set(key).issubset({"0", "1"}):
+        return tuple(int(c) for c in key), False
+
+    # Comma-separated days (e.g., "mon, wed, fri")
+    valid_days = {day[:3].upper() for day in cs.WEEKDAYS}
+    user_days = {p.strip()[:3] for p in key.split(",")}
+
+    if user_days.issubset(valid_days):
+        bits = tuple(1 if day[:3].upper() in user_days else 0 for day in cs.WEEKDAYS)
+        return bits, False
+
+    raise ValueError(
+        f"Invalid service_pattern '{pattern}'. "
+        f"Expected predefined key ({', '.join(cs.SERVICE_PATTERNS)}), "
+        "a 7-digit bitstring, or comma-separated days."
+    )
+
+
+# TODO: incorporate this on pipeflow side and use it to infer holiday behavior
+# in the absence of a holidays table
+def holiday_action_from_pattern(pattern: str) -> str:
+    """
+    Map a service pattern to holiday behavior.
+
+    Returns:
+        "add"    -> service is ADDED on holidays
+        "remove" -> service is REMOVED on holidays
+        "none"   -> holidays do not alter the weekly pattern
+    """
+    key = str(pattern).strip().upper()
+
+    if key in {"DOM", "FER"}:
+        return "add"
+
+    if key in {"DU", "SAB", "DU_SAB"}:
+        return "remove"
+
+    if key == "TODOS":
+        return "none"
+
+    # conservative default for custom bitstrings / day lists
+    return "none"
+
+
+# ── Private Internal Helpers ─────────────────────────────────────────
+
+
+def make_shape_ids(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Generate a shape_id from route name and direction.
+
+    Any hyphens in the route name are replaced with underscores to
+    keep ``cs.SEP`` unambiguous in compound IDs.
+    """
+    clean_short_name = (
+        df["route_short_name"].astype(str).str.replace(cs.SEP, "_", regex=False)
+    )
+
+    return df.assign(
+        route_short_name=clean_short_name,
+        shape_id=clean_short_name + cs.SEP + df["direction"].astype(str),
+    )
 
 
 def _clean_speed_zones(
