@@ -8,7 +8,6 @@ import pytz
 import pycountry
 
 WGS84 = "EPSG:4326"
-SEP = "-"
 
 # ── Geometry defaults ────────────────────────────────────────────────
 

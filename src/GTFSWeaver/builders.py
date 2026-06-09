@@ -71,21 +71,6 @@ def _get_num_trips(row: pd.Series) -> int:
     return max(1, int(float(row["frequency"]) * duration))
 
 
-def _expand_direction_both(df: pd.DataFrame) -> pd.DataFrame:
-    """Expand direction=2 into paired rows for directions 0 and 1."""
-    mask = df["direction"] == 2
-    if not mask.any():
-        return df.copy()
-
-    both = df.loc[mask]
-    rest = df.loc[~mask]
-    expanded = pd.concat(
-        [rest, both.assign(direction=0), both.assign(direction=1)],
-        ignore_index=True,
-    )
-    return expanded
-
-
 def _empty_stop_times() -> pd.DataFrame:
     """Return an empty stop_times table with GTFS columns."""
     return pd.DataFrame(
@@ -106,10 +91,7 @@ def _iter_shape_rows(
     coords: Iterable[tuple[float, float]],
 ) -> list[list[object]]:
     """Return shape rows for ``shapes.txt``."""
-    return [
-        [shape_id, seq, coord[0], coord[1]]
-        for seq, coord in enumerate(coords)
-    ]
+    return [[shape_id, seq, coord[0], coord[1]] for seq, coord in enumerate(coords)]
 
 
 def _allocate_integer_seconds(
@@ -187,13 +169,7 @@ def build_agency(pfeed: ProtoFeed) -> pd.DataFrame:
 def build_calendar(
     pfeed: ProtoFeed,
 ) -> tuple[pd.DataFrame, pd.DataFrame | None, dict[str, str]]:
-    """Build ``calendar.txt`` and ``calendar_dates.txt``.
-
-    Holiday behavior is derived from ``service_pattern``:
-    - ``add``: holidays add service
-    - ``remove``: holidays remove service
-    - ``none``: holidays do not alter weekly service
-    """
+    """Build ``calendar.txt`` and ``calendar_dates.txt``."""
     weekdays = list(cs.WEEKDAYS)
     profiles = pfeed.service_profiles.copy()
 
@@ -263,36 +239,19 @@ def build_routes(pfeed: ProtoFeed) -> pd.DataFrame:
             ["route_short_name", "route_long_name", "route_type"]
         )
         .drop_duplicates()
-        .assign(
-            route_id=lambda df: df["route_short_name"].map(make_route_id)
-        )
+        .assign(route_id=lambda df: df["route_short_name"].map(make_route_id))
     )
-    return routes[
-        ["route_id", "route_short_name", "route_long_name", "route_type"]
-    ]
+    return routes[["route_id", "route_short_name", "route_long_name", "route_type"]]
 
 
 def build_shapes(pfeed: ProtoFeed) -> pd.DataFrame:
-    """Build ``shapes.txt`` from directional geometries."""
+    """Build shapes.txt from final ProtoFeed shape geometries."""
     rows: list[list[object]] = []
 
     for shape_id, geometry in pfeed.shapes[
         ["shape_id", "geometry"]
     ].itertuples(index=False):
-        direction = pfeed.shapes_extra.get(shape_id)
-        if direction is None:
-            continue
-
-        coords = list(geometry.coords)
-        if direction == 2:
-            rows.extend(_iter_shape_rows(f"{shape_id}{cs.SEP}1", coords))
-            rows.extend(
-                _iter_shape_rows(f"{shape_id}{cs.SEP}0", reversed(coords))
-            )
-        else:
-            rows.extend(
-                _iter_shape_rows(f"{shape_id}{cs.SEP}{direction}", coords)
-            )
+        rows.extend(_iter_shape_rows(shape_id, list(geometry.coords)))
 
     return pd.DataFrame(
         rows,
@@ -314,27 +273,14 @@ def build_stops(
     cluster_h3: bool = False,
     h3_resolution: int = cs.DEFAULT_H3_RESOLUTION,
 ) -> pd.DataFrame:
-    """Build ``stops.txt``.
-
-    If user-supplied stops already exist in ``ProtoFeed``, return them as-is.
-    Otherwise, synthesize stops from shapes.
-    """
+    """Build stops.txt."""
     if pfeed.stops is not None:
         return pfeed.stops.copy()
 
     if shapes is None:
         raise ValueError("Must provide shapes when pfeed.stops is None")
 
-    shapes_gdf = (
-        gk.geometrize_shapes(shapes, use_utm=True)
-        .assign(
-            base_shape=lambda df: df["shape_id"].str.rsplit(
-                cs.SEP,
-                n=1,
-            ).str[0]
-        )
-        .drop_duplicates("base_shape")
-    )
+    shapes_gdf = gk.geometrize_shapes(shapes, use_utm=True)
 
     stops = (
         make_stop_points(
@@ -368,17 +314,14 @@ def build_trips(
     routes: pd.DataFrame,
     profile_to_service: dict[str, str],
 ) -> pd.DataFrame:
-    """Build ``trips.txt``."""
-    resolved = pfeed.resolved_frequencies.drop(
-        columns=["route_id"],
-        errors="ignore",
-    )
+    """Build trips.txt."""
+    resolved = pfeed.resolved_frequencies.copy()
 
-    route_freq = (
-        routes[["route_id", "route_short_name"]]
-        .merge(resolved, on="route_short_name")
-        .merge(pfeed.service_profiles, on="service_profile_id")
-    )
+    if "route_id" not in resolved.columns:
+        resolved["route_id"] = resolved["route_short_name"].map(make_route_id)
+
+    valid_route_ids = set(routes["route_id"])
+    route_freq = resolved.loc[resolved["route_id"].isin(valid_route_ids)]
 
     rows: list[dict[str, object]] = []
 
@@ -387,31 +330,33 @@ def build_trips(
         if service_id is None:
             continue
 
+        direction = int(row["direction"])
         schedule_type = row.get("schedule_type", cs.SCHEDULE_HEADWAY)
-        directions = [0, 1] if row["direction"] == 2 else [int(row["direction"])]
+
         num_trips = 1
         if schedule_type != cs.SCHEDULE_FIXED:
             num_trips = _get_num_trips(row)
 
-        for direction in directions:
-            shape_id = f"{row['shape_id']}{cs.SEP}{direction}"
-            for sequence in range(num_trips):
-                # 101 Principle: A dumb, unique surrogate key
-                trip_id = make_trip_id(row["route_id"], direction, sequence)
-                
-                rows.append(
-                    {
-                        "route_id": row["route_id"],
-                        "trip_id": trip_id,
-                        "direction_id": direction,
-                        "shape_id": shape_id,
-                        "service_id": service_id,
-                        # --- The State Payload (Passed as columns!) ---
-                        "trip_start_time": row["start_time"],
-                        "sequence": sequence,
-                        "service_profile_id": row["service_profile_id"],
-                    }
-                )
+        for sequence in range(num_trips):
+            trip_id = make_trip_id(
+                row["route_id"],
+                row["service_profile_id"],
+                direction,
+                sequence,
+            )
+
+            rows.append(
+                {
+                    "route_id": row["route_id"],
+                    "trip_id": trip_id,
+                    "direction_id": direction,
+                    "shape_id": row["shape_id"],
+                    "service_id": service_id,
+                    "trip_start_time": row["start_time"],
+                    "sequence": sequence,
+                    "service_profile_id": row["service_profile_id"],
+                }
+            )
 
     return pd.DataFrame(rows)
 
@@ -422,11 +367,7 @@ def _build_proportional_template(
     *,
     max_segment_speed_kmh: float = DEFAULT_MAX_SEGMENT_SPEED_KMH,
 ) -> pd.DataFrame:
-    """Build a proportional stop-time template for one trip.
-
-    A segment-level minimum travel time is enforced from projected
-    inter-stop distances and a maximum plausible vehicle speed.
-    """
+    """Build a proportional stop-time template for one trip."""
     if projected.empty:
         return _empty_stop_times()
 
@@ -497,14 +438,11 @@ def _build_zone_template(
     shape_speeds = (
         shape_point_speeds.loc[lambda df: df["shape_id"] == shape_id]
         .assign(speed=lambda df: df["speed"] * KMH_TO_MS)
-        .filter(
-            ["shape_id", "shape_dist_traveled", "speed_zone_id", "speed"]
-        )
+        .filter(["shape_id", "shape_dist_traveled", "speed_zone_id", "speed"])
     )
 
-    zones = (
-        zones_utm.loc[lambda df: df["route_type"] == route_type]
-        .assign(speed=lambda df: df["speed"] * KMH_TO_MS)
+    zones = zones_utm.loc[lambda df: df["route_type"] == route_type].assign(
+        speed=lambda df: df["speed"] * KMH_TO_MS
     )
 
     default_speed_ms = default_speed * KMH_TO_MS
@@ -539,15 +477,11 @@ def _build_zone_template(
             weight_to_next=lambda df: (
                 df["speed_weight_total"].diff().shift(-1).fillna(0)
             ),
-            speed_to_next=lambda df: (
-                df["weight_to_next"] / df["dist_to_next"]
-            ).fillna(0),
-            duration=lambda df: (
-                df["dist_to_next"] / df["speed_to_next"]
-            ).fillna(0),
-            arrival_time=lambda df: (
-                df["duration"].shift(1).cumsum().fillna(0)
+            speed_to_next=lambda df: (df["weight_to_next"] / df["dist_to_next"]).fillna(
+                0
             ),
+            duration=lambda df: (df["dist_to_next"] / df["speed_to_next"]).fillna(0),
+            arrival_time=lambda df: (df["duration"].shift(1).cumsum().fillna(0)),
         )
     )
 
@@ -581,18 +515,13 @@ def build_stop_times(
     frequencies = pfeed.resolved_frequencies.copy()
 
     if "route_id" not in frequencies.columns:
-        frequencies["route_id"] = frequencies["route_short_name"].map(
-            make_route_id
-        )
+        frequencies["route_id"] = frequencies["route_short_name"].map(make_route_id)
 
     # 101 Principle: No parsing! trips already has direction_id, sequence, etc.
-    # We just align the direction column name for the merge.
     trips_for_merge = trips.rename(columns={"direction_id": "direction"})
 
     trip_expanded = trips_for_merge.merge(
-        _expand_direction_both(
-            frequencies.drop(columns=["shape_id"], errors="ignore")
-        ),
+        frequencies.drop(columns=["shape_id"], errors="ignore"),
         on=["route_id", "service_profile_id", "direction"],
         how="left",
         suffixes=("_trip", ""),
@@ -605,9 +534,7 @@ def build_stop_times(
     if trip_expanded.empty:
         return _empty_stop_times()
 
-    shapes_utm = gk.geometrize_shapes(shapes, use_utm=True).set_index(
-        "shape_id"
-    )
+    shapes_utm = gk.geometrize_shapes(shapes, use_utm=True).set_index("shape_id")
     stops_utm = gk.geometrize_stops(stops, use_utm=True)
 
     if speed_mode == "proportional":
@@ -679,9 +606,7 @@ def build_stop_times(
         speed_cache: dict[int, gpd.GeoDataFrame] = {}
 
         group_cols = ["route_type", "shape_id", "speed"]
-        for (route_type, shape_id, speed), group in trip_expanded.groupby(
-            group_cols
-        ):
+        for (route_type, shape_id, speed), group in trip_expanded.groupby(group_cols):
             if shape_id not in shapes_utm.index:
                 continue
 
@@ -729,9 +654,7 @@ def build_stop_times(
                 frames.append(result)
 
     else:
-        raise ValueError(
-            "speed_mode must be either 'proportional' or 'zones'"
-        )
+        raise ValueError("speed_mode must be either 'proportional' or 'zones'")
 
     if not frames:
         return _empty_stop_times()
@@ -765,15 +688,13 @@ def build_frequencies(
     frequencies = pfeed.resolved_frequencies.copy()
 
     if "route_id" not in frequencies.columns:
-        frequencies["route_id"] = frequencies["route_short_name"].map(
-            make_route_id
-        )
+        frequencies["route_id"] = frequencies["route_short_name"].map(make_route_id)
 
     service_profiles = pfeed.service_profiles[
         ["service_profile_id", "start_time", "end_time"]
     ]
 
-    freq_expanded = _expand_direction_both(frequencies).merge(
+    freq_expanded = frequencies.merge(
         service_profiles,
         on="service_profile_id",
         suffixes=("", "_prf"),

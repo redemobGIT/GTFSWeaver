@@ -22,7 +22,6 @@ from .builders import build_feed
 from .models import (
     Direction,
     ProtoFeed,
-    TripKey,
     holiday_action_from_pattern,
     make_route_id,
     parse_service_pattern,
@@ -39,7 +38,6 @@ except PackageNotFoundError:
 __all__ = [
     "Direction",
     "ProtoFeed",
-    "TripKey",
     "build_feed",
     "build_quality_report",
     "duration_seconds",

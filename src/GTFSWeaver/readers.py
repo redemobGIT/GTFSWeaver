@@ -31,11 +31,13 @@ from typing import Any, TypeAlias, TypedDict, cast
 
 import geopandas as gpd
 import pandas as pd
+import shapely.geometry as sg
 
 from . import constants as cs
 from .models import (
     Direction,
     ProtoFeed,
+    make_shape_id,
     make_shape_ids,
     make_route_id,
     make_service_profile_id,
@@ -309,79 +311,106 @@ def _read_excel_workbook(path: str | pl.Path) -> ExcelWorkbook:
 
 
 def _prepare_routes_data(routes_df: pd.DataFrame) -> pd.DataFrame:
-    """Apply pre-processing and inferences to the raw routes sheet."""
+    """Prepare normalized route rows for ProtoFeed construction."""
     df = routes_df.copy()
 
-    # Generate compound shape IDs (removes this hidden logic from downstream)
-    df = make_shape_ids(df)
-
-    # Wire up the orphaned inference logic!
     df = _infer_schedule_type(df)
 
-    # Standardize service patterns early so downstream functions don't have to
-    col = "service_pattern"
-    if col in df.columns:
-        df[col] = df[col].astype("string").str.upper()
+    df["service_pattern"] = (
+        df["service_pattern"]
+        .astype("string")
+        .str.upper()
+    )
+
+    df = make_shape_ids(df)
+
+    df["service_profile_id"] = df.apply(
+        _make_service_profile_id_from_row,
+        axis="columns",
+    )
 
     return df
 
 
-def _excel_to_service_profiles(clean_routes: pd.DataFrame) -> pd.DataFrame:
-    """
-    Extract unique service profiles from the pre-processed routes sheet.
+def _make_service_profile_id_from_row(row: pd.Series) -> str:
+    """Generate the deterministic service-profile ID for one route row."""
+    return make_service_profile_id(
+        schedule_type=row["schedule_type"],
+        start_time=row["start_time"],
+        end_time=row.get("end_time"),
+        pattern=row["service_pattern"],
+    )
 
-    Parses service patterns into boolean weekday and holiday matrices,
-    and generates deterministic IDs safely across mixed schedule types.
-    """
-    key_cols = ["start_time", "end_time", "service_pattern"]
-    profiles = clean_routes[key_cols].drop_duplicates().reset_index(drop=True)
+
+def _excel_to_service_profiles(clean_routes: pd.DataFrame) -> pd.DataFrame:
+    """Extract unique service profiles from prepared route rows."""
+    profile_cols = [
+        "service_profile_id",
+        "schedule_type",
+        "start_time",
+        "end_time",
+        "service_pattern",
+    ]
+
+    profiles = (
+        clean_routes[profile_cols]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+
+    duplicated = profiles["service_profile_id"].duplicated(keep=False)
+    if duplicated.any():
+        collisions = profiles.loc[duplicated].sort_values(
+            "service_profile_id"
+        )
+        raise ValueError(
+            "service_profile_id collision across distinct profiles. "
+            "Increase the hash length or inspect schedule fields:\n"
+            f"{collisions.to_string(index=False)}"
+        )
 
     parsed = profiles["service_pattern"].apply(parse_service_pattern)
 
-    weekdays_df = pd.DataFrame(parsed.str[0].tolist(), columns=list(cs.WEEKDAYS))
-    profiles = pd.concat([profiles, weekdays_df], axis="columns")
-    profiles["holiday"] = parsed.str[1].astype(int)
-
-    # 101 Principle: Utilize the deterministic surrogate key generator
-    def generate_profile_id(row: pd.Series) -> str:
-        return make_service_profile_id(
-            start_time=row["start_time"],
-            end_time=row["end_time"],
-            pattern=row["service_pattern"]
-        )
-
-    profiles["service_profile_id"] = profiles.apply(generate_profile_id, axis=1)
-
-    output_columns = (
-        ["service_profile_id", "start_time", "end_time", "service_pattern"]
-        + list(cs.WEEKDAYS)
-        + ["holiday"]
+    weekdays = pd.DataFrame(
+        parsed.str[0].tolist(),
+        columns=list(cs.WEEKDAYS),
     )
 
-    return profiles[output_columns]
+    profiles = pd.concat([profiles, weekdays], axis="columns")
+    profiles["holiday"] = parsed.str[1].astype(int)
+
+    return profiles[
+        profile_cols
+        + list(cs.WEEKDAYS)
+        + ["holiday"]
+    ]
 
 
 def _excel_to_trip_blueprints(
-    clean_routes: pd.DataFrame, service_profiles: pd.DataFrame
+    clean_routes: pd.DataFrame,
+    service_profiles: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Convert pre-processed routes into the master trip blueprint table.
-    """
-    keys = ["start_time", "end_time", "service_pattern"]
-    merged = clean_routes.merge(
-        service_profiles[keys + ["service_profile_id"]], on=keys, how="left"
-    )
+    """Convert prepared route rows into the master trip blueprint table."""
+    out = clean_routes.copy()
 
-    if merged["service_profile_id"].isna().any():
+    missing_profiles = (
+        set(out["service_profile_id"])
+        - set(service_profiles["service_profile_id"])
+    )
+    if missing_profiles:
         raise ValueError(
             "Could not match all routes to service profiles. "
-            "Check schedule timing and patterns."
+            f"Missing profile IDs: {sorted(missing_profiles)}"
         )
 
-    merged["frequency"] = _calculate_trip_frequencies(merged)
+    out["frequency"] = _calculate_trip_frequencies(out)
+    out["route_id"] = out["route_short_name"].apply(make_route_id)
 
-    merged["direction"] = merged["direction_id"].apply(Direction.from_label).astype(int)
-    merged["route_id"] = merged["route_short_name"].apply(make_route_id)
+    if "route_type" in out.columns:
+        out["route_type"] = pd.to_numeric(
+            out["route_type"],
+            errors="raise",
+        ).astype(int)
 
     blueprint_cols = [
         "route_id",
@@ -400,7 +429,7 @@ def _excel_to_trip_blueprints(
         "speed",
     ]
 
-    return merged[blueprint_cols]
+    return out[blueprint_cols]
 
 
 def _calculate_trip_frequencies(df: pd.DataFrame) -> pd.Series:
@@ -430,9 +459,18 @@ def _infer_schedule_type(df: pd.DataFrame) -> pd.DataFrame:
     - headway: end_time and headway_mins are both present
     - fixed: headway_mins is missing
     - invalid: headway_mins is present but end_time is missing
+
+    Fixed rows may have no end_time.
     """
-    has_end = df["end_time"].notna()
-    has_headway = df["headway_mins"].notna()
+    out = df.copy()
+
+    if "end_time" not in out.columns:
+        out["end_time"] = pd.NA
+    if "headway_mins" not in out.columns:
+        out["headway_mins"] = pd.NA
+
+    has_end = out["end_time"].notna()
+    has_headway = out["headway_mins"].notna()
 
     invalid = has_headway & ~has_end
     if invalid.any():
@@ -441,12 +479,10 @@ def _infer_schedule_type(df: pd.DataFrame) -> pd.DataFrame:
             f"Invalid row indices: {invalid[invalid].index.tolist()}"
         )
 
-    inferred = pd.Series(cs.SCHEDULE_FIXED, index=df.index)
-    inferred.loc[has_end & has_headway] = cs.SCHEDULE_HEADWAY
+    out["schedule_type"] = cs.SCHEDULE_FIXED
+    out.loc[has_end & has_headway, "schedule_type"] = cs.SCHEDULE_HEADWAY
 
-    df["schedule_type"] = inferred
-
-    return df
+    return out
 
 
 # ── Geospatial Data Extraction ───────────────────────────────────────────────
@@ -681,14 +717,63 @@ def _validate_geo_extension(path: pl.Path) -> None:
 # ── Formatting & Validation Utilities ────────────────────────────────────────
 
 
-def _shape_table_from_gdf(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Format shapes for the internal table, generating IDs if needed."""
-    out = gdf.copy()
+def _shape_table_from_gdf(shapes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Convert route geometries into final directional shape rows.
 
-    if "shape_id" not in out.columns:
-        out = make_shape_ids(out)
+    A source geometry with direction='both' is expanded into:
+    - direction 0: original geometry
+    - direction 1: reversed geometry
+    """
+    rows: list[pd.Series] = []
 
-    return out[["shape_id", "geometry"]]
+    for _, row in shapes_gdf.iterrows():
+        direction = Direction.from_label(row["direction"])
+
+        if direction == Direction.BOTH:
+            for expanded_direction, geometry in (
+                (Direction.FORWARD, row.geometry),
+                (Direction.REVERSE, _reverse_linestring(row.geometry)),
+            ):
+                out = row.copy()
+                out["direction"] = int(expanded_direction)
+                out["shape_id"] = make_shape_id(
+                    row["route_short_name"],
+                    int(expanded_direction),
+                )
+                out["geometry"] = geometry
+                rows.append(out)
+        else:
+            out = row.copy()
+            out["direction"] = int(direction)
+            out["shape_id"] = make_shape_id(
+                row["route_short_name"],
+                int(direction),
+            )
+            rows.append(out)
+
+    result = gpd.GeoDataFrame(rows, geometry="geometry", crs=shapes_gdf.crs)
+    result = result[["shape_id", "geometry"]].reset_index(drop=True)
+
+    duplicated = result["shape_id"].duplicated(keep=False)
+    if duplicated.any():
+        duplicates = result.loc[duplicated, "shape_id"].unique().tolist()
+        raise ValueError(
+            "Routes geo file produces duplicated shape_id values: "
+            f"{duplicates[:10]}"
+        )
+
+    return result
+
+
+def _reverse_linestring(line: sg.LineString) -> sg.LineString:
+    """Return a reversed LineString."""
+    if not isinstance(line, sg.LineString):
+        raise TypeError(
+            "Routes geo file must contain only LineString geometries."
+        )
+
+    return sg.LineString(list(line.coords)[::-1])
 
 
 def _stops_gdf_to_table(gdf: gpd.GeoDataFrame) -> pd.DataFrame:

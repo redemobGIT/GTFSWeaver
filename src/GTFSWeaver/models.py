@@ -137,25 +137,32 @@ class Direction(IntEnum):
     BOTH = 2
 
     @classmethod
-    def from_label(cls, label: str | int) -> Direction:
-        """Parse from int, digit string, or PT/EN label."""
+    def from_label(cls, label: str | int) -> "Direction":
+        """Parse direction from int, digit string, or PT/EN label."""
         if isinstance(label, (int, np.integer)):
             return cls(int(label))
+
         key = str(label).strip().lower()
         mapping = {
             "inbound": cls.FORWARD,
             "ida": cls.FORWARD,
+            "forward": cls.FORWARD,
             "outbound": cls.REVERSE,
             "volta": cls.REVERSE,
+            "reverse": cls.REVERSE,
             "both": cls.BOTH,
-            "0": cls.REVERSE,
-            "1": cls.FORWARD,
+            "ambos": cls.BOTH,
+            "0": cls.FORWARD,
+            "1": cls.REVERSE,
             "2": cls.BOTH,
         }
+
         if key in mapping:
             return mapping[key]
+
         raise ValueError(
-            f"Invalid direction '{label}'. " f"Expected: 0/1/2, inbound/outbound/both."
+            f"Invalid direction {label!r}. "
+            "Expected 0/1/2, ida/volta, inbound/outbound, or both."
         )
 
 
@@ -185,26 +192,39 @@ def make_route_id(route_short_name: str | int) -> str:
 
 
 def make_service_profile_id(
-    start_time: str | float, end_time: str | float, pattern: str
+    *,
+    schedule_type: str,
+    start_time: str,
+    end_time: str | None,
+    pattern: str,
 ) -> str:
     """
-    Create a short, opaque, deterministic surrogate key for service profiles.
+    Create a deterministic surrogate key for a service profile.
 
-    Generates a 6-character hash from the core attributes, eliminating
-    ugly colons and volatile times from the ID string.
+    The 10-character hash is long enough for normal feed sizes, while still
+    keeping IDs compact.
     """
-    raw_parts = [start_time, end_time, pattern]
-    clean_parts = [str(p).strip() for p in raw_parts if pd.notna(p) and p != ""]
+    raw_parts = [schedule_type, start_time, end_time, pattern]
+    clean_parts = [
+        str(part).strip()
+        for part in raw_parts
+        if pd.notna(part) and part != ""
+    ]
 
-    sig = "|".join(clean_parts)
-    short_hash = hashlib.md5(sig.encode()).hexdigest()[:6]
+    signature = "|".join(clean_parts)
+    short_hash = hashlib.md5(signature.encode()).hexdigest()[:10]
 
     return f"prf_{short_hash}"
 
 
-def make_trip_id(route_id: str, direction: int, sequence: int) -> str:
-    """Generate a unique, dumb surrogate key for a trip."""
-    return f"t_{route_id}_{direction}_{sequence}"
+def make_trip_id(
+    route_id: str,
+    service_profile_id: str,
+    direction: int,
+    sequence: int,
+) -> str:
+    """Generate a deterministic trip_id unique across service profiles."""
+    return f"t_{route_id}_{service_profile_id}_{direction}_{sequence}"
 
 
 # ── Public API Helpers ───────────────────────────────────────────────
@@ -271,17 +291,33 @@ def holiday_action_from_pattern(pattern: str) -> str:
 # ── Private Internal Helpers ─────────────────────────────────────────
 
 
-def _make_shape_ids(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Generate a shape_id from the route name and direction.
-    """
-    # Apply the strict slugifier to guarantee downstream engine compatibility
-    clean_names = df["route_short_name"].apply(_make_slug)
+def _create_shape_id_label(route_short_name: str | int, direction: str | int) -> str:
+    """Generate the final directional shape_id used inside ProtoFeed."""
+    parsed = Direction.from_label(direction)
 
-    return df.assign(
-        route_short_name=clean_names,
-        shape_id=clean_names + "_" + df["direction"].astype(str),
-    )
+    if parsed == Direction.BOTH:
+        raise ValueError(
+            "Cannot create one final shape_id for direction='both'. "
+            "Expand it into directions 0 and 1 first."
+        )
+
+    return f"sh_{_make_slug(route_short_name)}_{int(parsed)}"
+
+
+def make_shape_ids(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add normalized direction and final shape_id.
+
+    Does not mutate route_short_name, because route_short_name is a public
+    display field in GTFS.
+    """
+    out = df.copy()
+    out["direction"] = out["direction"].map(Direction.from_label).astype(int)
+    out["shape_id"] = [
+        _create_shape_id_label(route, direction)
+        for route, direction in zip(out["route_short_name"], out["direction"])
+    ]
+    return out
 
 
 def _clean_speed_zones(

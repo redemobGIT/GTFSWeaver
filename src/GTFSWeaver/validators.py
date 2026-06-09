@@ -17,6 +17,7 @@ import pandera.pandas as pa
 import pytz
 
 from . import constants as cs
+from .models import Direction
 
 _URL = re.compile(
     r"^https?://(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+"
@@ -50,8 +51,18 @@ SCHEMA_SERVICE_PROFILES = pa.DataFrameSchema(
             pa.Check.str_matches(_NONBLANK),
             unique=True,
         ),
+        "schedule_type": pa.Column(
+            str,
+            pa.Check.isin([cs.SCHEDULE_HEADWAY, cs.SCHEDULE_FIXED]),
+        ),
         "start_time": pa.Column(str, pa.Check.str_matches(_TIME)),
-        "end_time": pa.Column(str, pa.Check.str_matches(_TIME)),
+        "end_time": pa.Column(
+            str,
+            pa.Check.str_matches(_TIME),
+            nullable=True,
+            required=False,
+        ),
+        "service_pattern": pa.Column(str, pa.Check.str_matches(_NONBLANK)),
         **{
             day: pa.Column(int, pa.Check.isin(range(2)))
             for day in cs.WEEKDAYS
@@ -230,7 +241,10 @@ SCHEMA_EXCEL_ROUTES = pa.DataFrameSchema(
             required=False,
             coerce=True,
         ),
-        "direction_id": pa.Column(str, pa.Check.str_matches(_NONBLANK)),
+        "direction": pa.Column(
+            int,
+            pa.Check.isin([0, 1]),
+        ),
         "schedule_type": pa.Column(
             str,
             pa.Check.isin([cs.SCHEDULE_HEADWAY, cs.SCHEDULE_FIXED]),
@@ -335,13 +349,13 @@ def _check_headway_completeness(routes_df: pd.DataFrame) -> None:
         )
 
     if "headway_mins" not in headway.columns:
-        raise ValueError(
-            "Headway schedule requires a 'headway_mins' column"
-        )
+        raise ValueError("Headway schedule requires a 'headway_mins' column")
 
-    bad_headway = headway.loc[
-        headway["headway_mins"].isna() | (headway["headway_mins"] <= 0)
-    ]
+    headway_mins = pd.to_numeric(
+        headway["headway_mins"],
+        errors="coerce",
+    )
+    bad_headway = headway.loc[headway_mins.isna() | headway_mins.le(0)]
     if not bad_headway.empty:
         raise ValueError(
             "Headway rows invalid 'headway_mins' at index: "
@@ -360,9 +374,11 @@ def _check_fixed_rows_have_travel_time(routes_df: pd.DataFrame) -> None:
     if "travel_time_mins" not in fixed.columns:
         raise ValueError("Fixed schedule requires a 'travel_time_mins' column")
 
-    bad = fixed.loc[
-        fixed["travel_time_mins"].isna() | (fixed["travel_time_mins"] <= 0)
-    ]
+    travel_time = pd.to_numeric(
+        fixed["travel_time_mins"],
+        errors="coerce",
+    )
+    bad = fixed.loc[travel_time.isna() | travel_time.le(0)]
     if not bad.empty:
         raise ValueError(
             "Fixed rows invalid 'travel_time_mins' at index: "
@@ -381,35 +397,60 @@ def _check_service_patterns(routes_df: pd.DataFrame) -> None:
             raise ValueError(f"Row {idx}: {exc}") from None
 
 
+def _direction_pairs(
+    df: pd.DataFrame,
+    *,
+    route_col: str = "route_short_name",
+    direction_col: str = "direction",
+    expand_both: bool,
+) -> set[tuple[str, int]]:
+    """Return route-direction coverage pairs."""
+    pairs: set[tuple[str, int]] = set()
+
+    for _, row in df.iterrows():
+        route = str(row[route_col])
+        direction = Direction.from_label(row[direction_col])
+
+        if direction == Direction.BOTH:
+            if not expand_both:
+                raise ValueError(
+                    "direction='both' is not allowed in the routes sheet. "
+                    "Use one row for ida and one row for volta."
+                )
+
+            pairs.add((route, int(Direction.FORWARD)))
+            pairs.add((route, int(Direction.REVERSE)))
+            continue
+
+        pairs.add((route, int(direction)))
+
+    return pairs
+
+
 def _check_route_direction_coverage(
     routes_df: pd.DataFrame,
     shapes_gdf: gpd.GeoDataFrame,
 ) -> None:
-    """Ensure every Excel route-direction pair exists in the geo file."""
-    from .models import Direction
+    """Ensure every route-table direction is covered by the routes geo file."""
+    route_pairs = _direction_pairs(
+        routes_df,
+        direction_col="direction",
+        expand_both=False,
+    )
+    shape_pairs = _direction_pairs(
+        shapes_gdf,
+        direction_col="direction",
+        expand_both=True,
+    )
 
-    excel_pairs: set[tuple[str, int]] = set()
-    for _, row in routes_df.iterrows():
-        direction = Direction.from_label(row["direction_id"])
-        if direction == Direction.BOTH:
-            excel_pairs.add((str(row["route_short_name"]), 0))
-            excel_pairs.add((str(row["route_short_name"]), 1))
-        else:
-            excel_pairs.add((str(row["route_short_name"]), int(direction)))
-
-    geo_pairs: set[tuple[str, int]] = set()
-    for _, row in shapes_gdf.iterrows():
-        direction = Direction.from_label(row["direction"])
-        geo_pairs.add((str(row["route_short_name"]), int(direction)))
-
-    missing = excel_pairs - geo_pairs
+    missing = route_pairs - shape_pairs
     if missing:
         formatted = [
             f"({route}, dir={direction})"
             for route, direction in missing
         ]
         raise ValueError(
-            "Routes in Excel not found in geo file: "
+            "Routes in Excel not covered by routes geo file: "
             f"{', '.join(sorted(formatted))}"
         )
 

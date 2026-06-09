@@ -86,7 +86,7 @@ def make_stop_points(
         frame = gpd.GeoDataFrame(
             {
                 "point_id": [
-                    f"{line_id}{cs.SEP}{suffix}" for suffix in suffixes
+                    f"{line_id}_{suffix}" for suffix in suffixes
                 ],
                 id_col: line_id,
                 "shape_dist_traveled": distances,
