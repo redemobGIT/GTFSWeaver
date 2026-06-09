@@ -14,7 +14,7 @@ The routes geofile should contain either:
 - ``route_short_name`` and ``direction``.
 
 If ``shape_id`` is not present, internal shape IDs are generated as
-``make_shape_id(route_short_name, direction)``.
+``make_shape_ids(route_short_name, direction)``.
 
 Future importers
 ----------------
@@ -34,10 +34,19 @@ import numpy as np
 import pandas as pd
 
 from . import constants as cs
-from .models import Direction, ProtoFeed, make_shape_ids, make_route_id
-from .models import parse_service_pattern
-from .validators import validate_excel_tables, validate_speed_zones_gdf
-from .validators import validate_tables
+from .models import (
+    Direction,
+    ProtoFeed,
+    make_shape_ids,
+    make_route_id,
+    make_service_profile_id,
+    parse_service_pattern,
+)
+from .validators import (
+    validate_excel_tables,
+    validate_speed_zones_gdf,
+    validate_tables,
+)
 
 Layer: TypeAlias = str | int
 LayerSelection: TypeAlias = Layer | list[Layer] | None
@@ -61,7 +70,7 @@ class CompanionGeoFiles(TypedDict):
 
 class ProtoFeedTables(TypedDict):
     meta: pd.DataFrame
-    service_windows: pd.DataFrame
+    service_profiles: pd.DataFrame
     shapes: gpd.GeoDataFrame
     frequencies: pd.DataFrame
     stops: pd.DataFrame | None
@@ -70,82 +79,7 @@ class ProtoFeedTables(TypedDict):
     boundary: gpd.GeoDataFrame | None
 
 
-# -----------------------------------------------------------------------------
-# Public readers
-# -----------------------------------------------------------------------------
-
-
-def read_geo_file(
-    path: str | pl.Path,
-    *,
-    layer: LayerSelection = None,
-    source_crs: int | str | None = None,
-    target_crs: int | str | None = None,
-    warn_multiple_layers: bool = True,
-    source_layer_col: str | None = "source_file_layer",
-    **read_file_kwargs: Any,
-) -> gpd.GeoDataFrame:
-    """Read one or more layers from a supported geospatial file.
-
-    By default, ``layer=None`` follows GeoPandas/Pyogrio behavior and reads
-    the default layer, usually the first one.
-
-    Parameters
-    ----------
-    path
-        Path to the geospatial file.
-    layer
-        Layer selection.
-
-        - ``None``: read the default layer, usually the first.
-        - ``str`` or ``int``: read one selected layer.
-        - ``list[str | int]``: read selected layers and concatenate them.
-        - ``"all"``: read and concatenate all spatial layers.
-
-        If the file has a real layer named ``"all"``, pass ``layer=["all"]``.
-    source_crs
-        CRS to assign when the file has no CRS metadata. This does not
-        transform coordinates; it only declares what CRS the coordinates are
-        already in.
-    target_crs
-        CRS to reproject to after reading.
-    warn_multiple_layers
-        If True, warn when the file has multiple spatial layers and no explicit
-        layer is selected.
-    source_layer_col
-        Column used to record the original source layer when several layers
-        are concatenated. If None, no provenance column is added.
-    **read_file_kwargs
-        Extra keyword arguments passed to ``geopandas.read_file()``.
-    """
-    path = pl.Path(path)
-    _validate_geo_extension(path)
-
-    layers_to_concat = _layers_to_concat(path, layer)
-
-    if layers_to_concat is None:
-        if layer is None and warn_multiple_layers:
-            _warn_if_multiple_spatial_layers(path)
-
-        gdf = gpd.read_file(
-            path,
-            layer=layer,
-            **read_file_kwargs,
-        )
-    else:
-        gdf = _read_geo_layers(
-            path,
-            layers=layers_to_concat,
-            source_layer_col=source_layer_col,
-            **read_file_kwargs,
-        )
-
-    return _resolve_crs(
-        gdf,
-        path=path,
-        source_crs=source_crs,
-        target_crs=target_crs,
-    )
+# ── Public APIs (The Headlines) ──────────────────────────────────────────────
 
 
 def read_protofeed(
@@ -222,9 +156,139 @@ def read_protofeed(
     return _make_protofeed(tables)
 
 
-# -----------------------------------------------------------------------------
-# Excel workbook handling
-# -----------------------------------------------------------------------------
+def read_geo_file(
+    path: str | pl.Path,
+    *,
+    layer: LayerSelection = None,
+    source_crs: int | str | None = None,
+    target_crs: int | str | None = None,
+    warn_multiple_layers: bool = True,
+    source_layer_col: str | None = "source_file_layer",
+    **read_file_kwargs: Any,
+) -> gpd.GeoDataFrame:
+    """Read one or more layers from a supported geospatial file.
+
+    By default, ``layer=None`` follows GeoPandas/Pyogrio behavior and reads
+    the default layer, usually the first one.
+
+    Parameters
+    ----------
+    path
+        Path to the geospatial file.
+    layer
+        Layer selection.
+
+        - ``None``: read the default layer, usually the first.
+        - ``str`` or ``int``: read one selected layer.
+        - ``list[str | int]``: read selected layers and concatenate them.
+        - ``"all"``: read and concatenate all spatial layers.
+
+        If the file has a real layer named ``"all"``, pass ``layer=["all"]``.
+    source_crs
+        CRS to assign when the file has no CRS metadata. This does not
+        transform coordinates; it only declares what CRS the coordinates are
+        already in.
+    target_crs
+        CRS to reproject to after reading.
+    warn_multiple_layers
+        If True, warn when the file has multiple spatial layers and no explicit
+        layer is selected.
+    source_layer_col
+        Column used to record the original source layer when several layers
+        are concatenated. If None, no provenance column is added.
+    **read_file_kwargs
+        Extra keyword arguments passed to ``geopandas.read_file()``.
+    """
+    path = pl.Path(path)
+    _validate_geo_extension(path)
+
+    layers_to_concat = _layers_to_concat(path, layer)
+
+    if layers_to_concat is None:
+        if layer is None and warn_multiple_layers:
+            _warn_if_multiple_spatial_layers(path)
+
+        gdf = gpd.read_file(
+            path,
+            layer=layer,
+            **read_file_kwargs,
+        )
+    else:
+        gdf = _read_geo_layers(
+            path,
+            layers=layers_to_concat,
+            source_layer_col=source_layer_col,
+            **read_file_kwargs,
+        )
+
+    return _resolve_crs(
+        gdf,
+        path=path,
+        source_crs=source_crs,
+        target_crs=target_crs,
+    )
+
+
+# ── Feed Orchestration ───────────────────────────────────────────────────────
+
+
+def _build_protofeed_tables(
+    *,
+    agency_df: pd.DataFrame,
+    routes_df: pd.DataFrame,
+    shapes_gdf: gpd.GeoDataFrame,
+    stops_gdf: gpd.GeoDataFrame | None,
+    speed_zones: gpd.GeoDataFrame | None,
+    holidays_df: pd.DataFrame | None,
+    boundary: gpd.GeoDataFrame | None,
+) -> ProtoFeedTables:
+
+    meta = agency_df[
+        [
+            "agency_name",
+            "agency_url",
+            "agency_timezone",
+            "start_date",
+            "end_date",
+        ]
+    ].copy()
+
+    service_profiles = _excel_to_service_profiles(routes_df)
+    frequencies = _excel_to_trip_blueprints(routes_df, service_profiles)
+
+    shapes = _shape_table_from_gdf(shapes_gdf)
+    stops = _stops_gdf_to_table(stops_gdf) if stops_gdf is not None else None
+
+    return {
+        "meta": meta,
+        "service_profiles": service_profiles,
+        "shapes": shapes,
+        "frequencies": frequencies,
+        "stops": stops,
+        "speed_zones": speed_zones,
+        "holidays": holidays_df,
+        "boundary": boundary,
+    }
+
+
+def _make_protofeed(tables: ProtoFeedTables) -> ProtoFeed:
+    validate_tables(_core_tables_for_validation(tables))
+    return ProtoFeed(**tables)
+
+
+def _core_tables_for_validation(tables: ProtoFeedTables) -> dict[str, object]:
+    """Return the core table set expected by validate_tables()."""
+    return {
+        "meta": tables["meta"],
+        "service_profiles": tables["service_profiles"],
+        "shapes": tables["shapes"],
+        "frequencies": tables["frequencies"],
+        "stops": tables["stops"],
+        "speed_zones": tables["speed_zones"],
+    }
+
+
+# ── Excel Data Extraction ────────────────────────────────────────────────────
 
 
 def _read_excel_workbook(path: str | pl.Path) -> ExcelWorkbook:
@@ -264,6 +328,102 @@ def _prepare_routes_data(routes_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _excel_to_service_profiles(clean_routes: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract unique service profiles from the pre-processed routes sheet.
+
+    Parses service patterns into boolean weekday and holiday matrices,
+    and generates deterministic IDs safely across mixed schedule types.
+    """
+    key_cols = ["start_time", "end_time", "service_pattern"]
+    profiles = clean_routes[key_cols].drop_duplicates().reset_index(drop=True)
+
+    parsed = profiles["service_pattern"].apply(parse_service_pattern)
+
+    weekdays_df = pd.DataFrame(parsed.str[0].tolist(), columns=list(cs.WEEKDAYS))
+    profiles = pd.concat([profiles, weekdays_df], axis="columns")
+    profiles["holiday"] = parsed.str[1].astype(int)
+
+    # 101 Principle: Utilize the deterministic surrogate key generator
+    def generate_profile_id(row: pd.Series) -> str:
+        return make_service_profile_id(
+            start_time=row["start_time"],
+            end_time=row["end_time"],
+            pattern=row["service_pattern"]
+        )
+
+    profiles["service_profile_id"] = profiles.apply(generate_profile_id, axis=1)
+
+    output_columns = (
+        ["service_profile_id", "start_time", "end_time", "service_pattern"]
+        + list(cs.WEEKDAYS)
+        + ["holiday"]
+    )
+
+    return profiles[output_columns]
+
+
+def _excel_to_trip_blueprints(
+    clean_routes: pd.DataFrame, service_profiles: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Convert pre-processed routes into the master trip blueprint table.
+    """
+    keys = ["start_time", "end_time", "service_pattern"]
+    merged = clean_routes.merge(
+        service_profiles[keys + ["service_profile_id"]], on=keys, how="left"
+    )
+
+    if merged["service_profile_id"].isna().any():
+        raise ValueError(
+            "Could not match all routes to service profiles. "
+            "Check schedule timing and patterns."
+        )
+
+    merged["frequency"] = _calculate_trip_frequencies(merged)
+
+    merged["direction"] = merged["direction_id"].apply(Direction.from_label).astype(int)
+    merged["route_id"] = merged["route_short_name"].apply(make_route_id)
+
+    blueprint_cols = [
+        "route_id",
+        "route_short_name",
+        "route_long_name",
+        "route_type",
+        "service_profile_id",
+        "shape_id",
+        "direction",
+        "start_time",
+        "end_time",
+        "schedule_type",
+        "frequency",
+        "headway_mins",
+        "travel_time_mins",
+        "speed",
+    ]
+
+    return merged[blueprint_cols]
+
+
+def _calculate_trip_frequencies(df: pd.DataFrame) -> pd.Series:
+    """
+    Determine the exact number of trips generated by each schedule rule.
+
+    - Fixed departures represent exactly 1 physical trip.
+    - Headways generate (60 / headway_mins) trips per hour.
+    """
+    # Initialize all rules as single, fixed trips
+    frequencies = pd.Series(1, index=df.index)
+
+    # Overwrite the calculation specifically for headway schedules
+    is_headway = df["schedule_type"].eq(cs.SCHEDULE_HEADWAY)
+    if is_headway.any():
+        headways = pd.to_numeric(df.loc[is_headway, "headway_mins"])
+        frequencies.loc[is_headway] = (60.0 / headways).round()
+
+    return frequencies.astype(int)
+
+
 def _infer_schedule_type(df: pd.DataFrame) -> pd.DataFrame:
     """
     Infer schedule_type from timing fields.
@@ -272,7 +432,6 @@ def _infer_schedule_type(df: pd.DataFrame) -> pd.DataFrame:
     - headway: end_time and headway_mins are both present
     - fixed: headway_mins is missing
     - invalid: headway_mins is present but end_time is missing
-    TODO: Check if this is still needed.
     """
     has_end = df["end_time"].notna()
     has_headway = df["headway_mins"].notna()
@@ -292,9 +451,7 @@ def _infer_schedule_type(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# -----------------------------------------------------------------------------
-# Companion geofile handling
-# -----------------------------------------------------------------------------
+# ── Geospatial Data Extraction ───────────────────────────────────────────────
 
 
 def _read_companion_geo_files(
@@ -369,228 +526,6 @@ def _load_and_stage_geo(
     renamed_df = _apply_column_map(gdf, column_map, table_name=table_name)
 
     return _strip_object_columns(renamed_df)
-
-
-# -----------------------------------------------------------------------------
-# Internal ProtoFeed construction
-# -----------------------------------------------------------------------------
-
-
-def _build_protofeed_tables(
-    *,
-    agency_df: pd.DataFrame,
-    routes_df: pd.DataFrame,
-    shapes_gdf: gpd.GeoDataFrame,
-    stops_gdf: gpd.GeoDataFrame | None,
-    speed_zones: gpd.GeoDataFrame | None,
-    holidays_df: pd.DataFrame | None,
-    boundary: gpd.GeoDataFrame | None,
-) -> ProtoFeedTables:
-
-    meta = agency_df[
-        [
-            "agency_name",
-            "agency_url",
-            "agency_timezone",
-            "start_date",
-            "end_date",
-        ]
-    ].copy()
-
-    service_profiles = _excel_to_service_profiles(routes_df)
-    frequencies = _excel_to_trip_blueprints(routes_df, service_profiles)
-
-    shapes = _shape_table_from_gdf(shapes_gdf)
-    stops = _stops_gdf_to_table(stops_gdf) if stops_gdf is not None else None
-
-    return {
-        "meta": meta,
-        "service_profiles": service_profiles,
-        "shapes": shapes,
-        "frequencies": frequencies,
-        "stops": stops,
-        "speed_zones": speed_zones,
-        "holidays": holidays_df,
-        "boundary": boundary,
-    }
-
-
-def _make_protofeed(tables: ProtoFeedTables) -> ProtoFeed:
-    validate_tables(_core_tables_for_validation(tables))
-    return ProtoFeed(**tables)
-
-
-def _core_tables_for_validation(tables: ProtoFeedTables) -> dict[str, object]:
-    """Return the core table set expected by validate_tables()."""
-    return {
-        "meta": tables["meta"],
-        "service_profiles": tables["service_profiles"],
-        "shapes": tables["shapes"],
-        "frequencies": tables["frequencies"],
-        "stops": tables["stops"],
-        "speed_zones": tables["speed_zones"],
-    }
-
-
-def _excel_to_service_profiles(clean_routes: pd.DataFrame) -> pd.DataFrame:
-    """
-    Extract unique service profiles from the pre-processed routes sheet.
-
-    Parses service patterns into boolean weekday and holiday matrices,
-    and generates deterministic IDs safely across mixed schedule types.
-    """
-    key_cols = ["start_time", "end_time", "service_pattern"]
-    profiles = clean_routes[key_cols].drop_duplicates().reset_index(drop=True)
-
-    parsed = profiles["service_pattern"].apply(parse_service_pattern)
-
-    weekdays_df = pd.DataFrame(parsed.str[0].tolist(), columns=list(cs.WEEKDAYS))
-    profiles = pd.concat([profiles, weekdays_df], axis="columns")
-    profiles["holiday"] = parsed.str[1].astype(int)
-
-    def generate_profile_id(row: pd.Series) -> str:
-        """Create a clean ID by dropping missing or blank time data."""
-        parts = ["prf", row["start_time"], row["end_time"], row["service_pattern"]]
-        return "_".join(str(p) for p in parts if pd.notna(p) and p != "")
-
-    profiles["service_profile_id"] = profiles.apply(generate_profile_id, axis=1)
-
-    output_columns = (
-        ["service_profile_id", "start_time", "end_time", "service_pattern"]
-        + list(cs.WEEKDAYS)
-        + ["holiday"]
-    )
-
-    return profiles[output_columns]
-
-
-def _excel_to_trip_blueprints(
-    clean_routes: pd.DataFrame, service_profiles: pd.DataFrame
-) -> pd.DataFrame:
-    """
-    Convert pre-processed routes into the master trip blueprint table.
-    """
-    keys = ["start_time", "end_time", "service_pattern"]
-    merged = clean_routes.merge(
-        service_profiles[keys + ["service_profile_id"]], on=keys, how="left"
-    )
-
-    if merged["service_profile_id"].isna().any():
-        raise ValueError(
-            "Could not match all routes to service profiles. "
-            "Check schedule timing and patterns."
-        )
-
-    merged["frequency"] = _calculate_trip_frequencies(merged)
-
-    merged["direction"] = merged["direction_id"].apply(Direction.from_label).astype(int)
-    merged["route_id"] = merged["route_short_name"].apply(make_route_id)
-
-    blueprint_cols = [
-        "route_id",
-        "route_short_name",
-        "route_long_name",
-        "route_type",
-        "service_profile_id",
-        "shape_id",
-        "direction",
-        "start_time",
-        "end_time",
-        "schedule_type",
-        "frequency",
-        "headway_mins",
-        "travel_time_mins",
-        "speed",
-    ]
-
-    return merged[blueprint_cols]
-
-
-def _calculate_trip_frequencies(df: pd.DataFrame) -> pd.Series:
-    """
-    Determine the exact number of trips generated by each schedule rule.
-
-    - Fixed departures represent exactly 1 physical trip.
-    - Headways generate (60 / headway_mins) trips per hour.
-    """
-    # Initialize all rules as single, fixed trips
-    frequencies = pd.Series(1, index=df.index)
-
-    # Overwrite the calculation specifically for headway schedules
-    is_headway = df["schedule_type"].eq(cs.SCHEDULE_HEADWAY)
-    if is_headway.any():
-        headways = pd.to_numeric(df.loc[is_headway, "headway_mins"])
-        frequencies.loc[is_headway] = (60.0 / headways).round()
-
-    return frequencies.astype(int)
-
-
-# -----------------------------------------------------------------------------
-# Geospatial file handling
-# -----------------------------------------------------------------------------
-
-
-def _validate_geo_extension(path: pl.Path) -> None:
-    suffix = path.suffix.lower()
-
-    if suffix not in cs.GEO_EXTENSIONS:
-        supported = ", ".join(sorted(cs.GEO_EXTENSIONS))
-        raise ValueError(
-            f"Unsupported geospatial format {suffix!r}. "
-            f"Supported extensions are: {supported}."
-        )
-
-
-def _layers_to_concat(
-    path: pl.Path,
-    layer: LayerSelection,
-) -> list[Layer] | None:
-    """Return layers to concatenate, or None for single-layer reads."""
-    if layer == "all":
-        return _list_spatial_layers(path)
-
-    if isinstance(layer, list):
-        if not layer:
-            raise ValueError("layer list cannot be empty.")
-        return layer
-
-    return None
-
-
-def _list_spatial_layers(path: pl.Path) -> list[str]:
-    layers = gpd.list_layers(path)
-
-    if "geometry_type" in layers.columns:
-        layers = layers[layers["geometry_type"].notna()]
-
-    layer_names = layers["name"].astype(str).tolist()
-
-    if not layer_names:
-        raise ValueError(f"No spatial layers found in {path}.")
-
-    return layer_names
-
-
-def _warn_if_multiple_spatial_layers(path: pl.Path) -> None:
-    try:
-        layers = _list_spatial_layers(path)
-    except Exception:
-        return
-
-    if len(layers) <= 1:
-        return
-
-    layer_names = "\n".join(f"  - {layer!r}" for layer in layers)
-
-    warnings.warn(
-        f"{path} has multiple spatial layers:\n"
-        f"{layer_names}\n"
-        "Reading the default layer, usually the first one.\n"
-        "Pass layer=... to choose one layer, layer=[...] to read selected "
-        "layers, or layer='all' to read all spatial layers.",
-        UserWarning,
-        stacklevel=3,
-    )
 
 
 def _read_geo_layers(
@@ -682,56 +617,70 @@ def _resolve_crs(
     return gdf
 
 
-# -----------------------------------------------------------------------------
-# Shared cleaning and validation helpers
-# -----------------------------------------------------------------------------
+def _layers_to_concat(
+    path: pl.Path,
+    layer: LayerSelection,
+) -> list[Layer] | None:
+    """Return layers to concatenate, or None for single-layer reads."""
+    if layer == "all":
+        return _list_spatial_layers(path)
+
+    if isinstance(layer, list):
+        if not layer:
+            raise ValueError("layer list cannot be empty.")
+        return layer
+
+    return None
 
 
-def _strip_object_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Trim whitespace and convert common empty-string markers to NA."""
-    df = df.copy()
+def _list_spatial_layers(path: pl.Path) -> list[str]:
+    layers = gpd.list_layers(path)
 
-    object_cols = df.select_dtypes(include=["object", "string"]).columns
+    if "geometry_type" in layers.columns:
+        layers = layers[layers["geometry_type"].notna()]
 
-    if not object_cols.empty:
-        na_markers = ["", "None", "none", "NaN", "nan", "<NA>"]
-        for col in object_cols:
-            df[col] = df[col].astype("string").str.strip()
+    layer_names = layers["name"].astype(str).tolist()
 
-        df[object_cols] = df[object_cols].replace(na_markers, pd.NA)
+    if not layer_names:
+        raise ValueError(f"No spatial layers found in {path}.")
 
-    return df
+    return layer_names
 
 
-def _apply_column_map(
-    df: pd.DataFrame,
-    column_map: ColumnMap | None,
-    *,
-    table_name: str,
-) -> pd.DataFrame:
-    """Rename source columns to expected columns using an explicit map."""
-    if not column_map:
-        return df
+def _warn_if_multiple_spatial_layers(path: pl.Path) -> None:
+    try:
+        layers = _list_spatial_layers(path)
+    except Exception:
+        return
 
-    missing_sources = set(column_map).difference(df.columns)
+    if len(layers) <= 1:
+        return
 
-    if missing_sources:
-        missing = ", ".join(sorted(missing_sources))
+    layer_names = "\n".join(f"  - {layer!r}" for layer in layers)
+
+    warnings.warn(
+        f"{path} has multiple spatial layers:\n"
+        f"{layer_names}\n"
+        "Reading the default layer, usually the first one.\n"
+        "Pass layer=... to choose one layer, layer=[...] to read selected "
+        "layers, or layer='all' to read all spatial layers.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _validate_geo_extension(path: pl.Path) -> None:
+    suffix = path.suffix.lower()
+
+    if suffix not in cs.GEO_EXTENSIONS:
+        supported = ", ".join(sorted(cs.GEO_EXTENSIONS))
         raise ValueError(
-            f"{table_name} column map references missing source columns: " f"{missing}."
+            f"Unsupported geospatial format {suffix!r}. "
+            f"Supported extensions are: {supported}."
         )
 
-    renamed = df.rename(columns=dict(column_map))
 
-    if renamed.columns.duplicated().any():
-        duplicated = renamed.columns[renamed.columns.duplicated()].tolist()
-        duplicated_text = ", ".join(repr(col) for col in duplicated)
-        raise ValueError(
-            f"{table_name} has duplicated columns after applying column map: "
-            f"{duplicated_text}."
-        )
-
-    return renamed
+# ── Formatting & Validation Utilities ────────────────────────────────────────
 
 
 def _shape_table_from_gdf(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -766,3 +715,50 @@ def _stops_gdf_to_table(gdf: gpd.GeoDataFrame) -> pd.DataFrame:
         stop_lat=gdf.geometry.y,
         stop_lon=gdf.geometry.x,
     )
+
+
+def _apply_column_map(
+    df: pd.DataFrame,
+    column_map: ColumnMap | None,
+    *,
+    table_name: str,
+) -> pd.DataFrame:
+    """Rename source columns to expected columns using an explicit map."""
+    if not column_map:
+        return df
+
+    missing_sources = set(column_map).difference(df.columns)
+
+    if missing_sources:
+        missing = ", ".join(sorted(missing_sources))
+        raise ValueError(
+            f"{table_name} column map references missing source columns: " f"{missing}."
+        )
+
+    renamed = df.rename(columns=dict(column_map))
+
+    if renamed.columns.duplicated().any():
+        duplicated = renamed.columns[renamed.columns.duplicated()].tolist()
+        duplicated_text = ", ".join(repr(col) for col in duplicated)
+        raise ValueError(
+            f"{table_name} has duplicated columns after applying column map: "
+            f"{duplicated_text}."
+        )
+
+    return renamed
+
+
+def _strip_object_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Trim whitespace and convert common empty-string markers to NA."""
+    df = df.copy()
+
+    object_cols = df.select_dtypes(include=["object", "string"]).columns
+
+    if not object_cols.empty:
+        na_markers = ["", "None", "none", "NaN", "nan", "<NA>"]
+        for col in object_cols:
+            df[col] = df[col].astype("string").str.strip()
+
+        df[object_cols] = df[object_cols].replace(na_markers, pd.NA)
+
+    return df
