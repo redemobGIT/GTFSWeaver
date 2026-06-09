@@ -30,7 +30,6 @@ from collections.abc import Mapping
 from typing import Any, TypeAlias, TypedDict, cast
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 
 from . import constants as cs
@@ -44,7 +43,6 @@ from .models import (
 )
 from .validators import (
     validate_excel_tables,
-    validate_speed_zones_gdf,
     validate_tables,
 )
 

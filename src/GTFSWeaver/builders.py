@@ -31,9 +31,9 @@ from .geometry import (
 )
 from .models import (
     ProtoFeed,
-    TripKey,
     holiday_action_from_pattern,
     make_route_id,
+    make_trip_id,
 )
 from .time_utils import duration_seconds, format_gtfs_time, parse_gtfs_time
 
@@ -84,17 +84,6 @@ def _expand_direction_both(df: pd.DataFrame) -> pd.DataFrame:
         ignore_index=True,
     )
     return expanded
-
-
-def _trip_context(trips: pd.DataFrame) -> pd.DataFrame:
-    """Extract trip context encoded in ``trip_id``."""
-    keys = trips["trip_id"].map(TripKey.from_trip_id)
-    return trips.assign(
-        service_profile_id=[key.service_profile_id for key in keys],
-        trip_start_time=[key.start_time for key in keys],
-        direction=trips["direction_id"].astype(int),
-        sequence=[key.sequence for key in keys],
-    )
 
 
 def _empty_stop_times() -> pd.DataFrame:
@@ -407,20 +396,20 @@ def build_trips(
         for direction in directions:
             shape_id = f"{row['shape_id']}{cs.SEP}{direction}"
             for sequence in range(num_trips):
-                key = TripKey(
-                    row["route_id"],
-                    row["service_profile_id"],
-                    row["start_time"],
-                    direction,
-                    sequence,
-                )
+                # 101 Principle: A dumb, unique surrogate key
+                trip_id = make_trip_id(row["route_id"], direction, sequence)
+                
                 rows.append(
                     {
                         "route_id": row["route_id"],
-                        "trip_id": key.to_trip_id(),
+                        "trip_id": trip_id,
                         "direction_id": direction,
                         "shape_id": shape_id,
                         "service_id": service_id,
+                        # --- The State Payload (Passed as columns!) ---
+                        "trip_start_time": row["start_time"],
+                        "sequence": sequence,
+                        "service_profile_id": row["service_profile_id"],
                     }
                 )
 
@@ -596,7 +585,11 @@ def build_stop_times(
             make_route_id
         )
 
-    trip_expanded = _trip_context(trips).merge(
+    # 101 Principle: No parsing! trips already has direction_id, sequence, etc.
+    # We just align the direction column name for the merge.
+    trips_for_merge = trips.rename(columns={"direction_id": "direction"})
+
+    trip_expanded = trips_for_merge.merge(
         _expand_direction_both(
             frequencies.drop(columns=["shape_id"], errors="ignore")
         ),
@@ -659,13 +652,13 @@ def build_stop_times(
             if projected is None or projected.empty:
                 continue
 
-            trip_key = TripKey.from_trip_id(row["trip_id"])
-            base_time = parse_gtfs_time(trip_key.start_time)
+            # 101 Principle: Access the data directly from the column!
+            base_time = parse_gtfs_time(row["trip_start_time"])
             schedule_type = row.get("schedule_type", cs.SCHEDULE_HEADWAY)
 
             offset = base_time
             if schedule_type != cs.SCHEDULE_FIXED:
-                offset += _get_headway_secs(row) * trip_key.sequence
+                offset += _get_headway_secs(row) * row["sequence"]
 
             template = _build_proportional_template(
                 projected=projected,
@@ -718,8 +711,8 @@ def build_stop_times(
                 continue
 
             for _, row in group.iterrows():
-                trip_key = TripKey.from_trip_id(row["trip_id"])
-                base_time = parse_gtfs_time(trip_key.start_time)
+                # 101 Principle: Access the data directly from the column!
+                base_time = parse_gtfs_time(row["trip_start_time"])
                 schedule_type = row.get(
                     "schedule_type",
                     cs.SCHEDULE_HEADWAY,
@@ -727,7 +720,7 @@ def build_stop_times(
 
                 offset = base_time
                 if schedule_type != cs.SCHEDULE_FIXED:
-                    offset += _get_headway_secs(row) * trip_key.sequence
+                    offset += _get_headway_secs(row) * row["sequence"]
 
                 result = template.copy()
                 result["trip_id"] = row["trip_id"]
@@ -795,19 +788,16 @@ def build_frequencies(
     seen: set[tuple[str, str, int]] = set()
 
     for _, trip in trips.iterrows():
-        key = TripKey.from_trip_id(trip["trip_id"])
-        group_key = (key.route_id, key.service_profile_id, key.direction)
+        # 101 Principle: Read straight from the columns
+        group_key = (trip["route_id"], trip["service_profile_id"], trip["direction_id"])
         if group_key in seen:
             continue
 
         seen.add(group_key)
         match = freq_expanded.loc[
-            (freq_expanded["route_id"] == key.route_id)
-            & (
-                freq_expanded["service_profile_id"]
-                == key.service_profile_id
-            )
-            & (freq_expanded["direction"] == key.direction)
+            (freq_expanded["route_id"] == trip["route_id"])
+            & (freq_expanded["service_profile_id"] == trip["service_profile_id"])
+            & (freq_expanded["direction"] == trip["direction_id"])
         ]
         if match.empty:
             continue
