@@ -13,6 +13,7 @@ import click
 from . import constants as cs
 from .readers import read_protofeed, read_protofeed_from_excel
 from .builders import build_feed
+from .qa import build_quality_report, has_blocking_issues
 
 
 @click.group()
@@ -32,6 +33,9 @@ def cli():
 @click.option("--cluster-h3/--no-cluster-h3", default=False, show_default=True)
 @click.option("--use-frequencies/--no-frequencies", default=False, show_default=True)
 @click.option("-nd", "--num-digits", default=6, type=int, show_default=True)
+@click.option("--strict/--no-strict", default=False, show_default=True)
+@click.option("--report-dir", default=None, type=click.Path(path_type=pl.Path))
+
 def from_directory(source_path, target_path, buffer, stop_offset, num_stops,
                    stop_spacing, speed_mode, cluster_h3, use_frequencies, num_digits):
     """Build GTFS from a directory of CSV/GeoJSON files."""
@@ -42,6 +46,17 @@ def from_directory(source_path, target_path, buffer, stop_offset, num_stops,
         speed_mode=speed_mode, cluster_h3=cluster_h3,
         use_frequencies=use_frequencies,
     )
+    report = build_quality_report(feed)
+
+    if report_dir is not None:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        for name, df in report.items():
+            df.to_csv(report_dir / f"{name}.csv", index=False)
+
+    if strict and has_blocking_issues(report):
+        raise click.ClickException(
+            "Blocking GTFS QA issues found. See --report-dir output."
+        )
     feed.write(target_path, ndigits=num_digits)
     click.echo(f"GTFS written to {target_path}")
 
@@ -60,6 +75,9 @@ def from_directory(source_path, target_path, buffer, stop_offset, num_stops,
 @click.option("--cluster-h3/--no-cluster-h3", default=True, show_default=True)
 @click.option("--use-frequencies/--no-frequencies", default=False, show_default=True)
 @click.option("-nd", "--num-digits", default=6, type=int, show_default=True)
+@click.option("--strict/--no-strict", default=False, show_default=True)
+@click.option("--report-dir", default=None, type=click.Path(path_type=pl.Path))
+
 def from_excel(xlsx_path, routes_geo_path, target_path, stops_geo_path,
                buffer, stop_offset, stop_spacing, speed_mode,
                cluster_h3, use_frequencies, num_digits):
@@ -74,3 +92,4 @@ def from_excel(xlsx_path, routes_geo_path, target_path, stops_geo_path,
     )
     feed.write(target_path, ndigits=num_digits)
     click.echo(f"GTFS written to {target_path}")
+

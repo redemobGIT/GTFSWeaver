@@ -16,12 +16,12 @@ import shapely.geometry as sg
 
 from . import constants as cs
 
-
 # ── Direction ────────────────────────────────────────────────────────
 
+
 class Direction(IntEnum):
-    REVERSE = 0
-    FORWARD = 1
+    FORWARD = 0
+    REVERSE = 1
     BOTH = 2
 
     @classmethod
@@ -31,19 +31,24 @@ class Direction(IntEnum):
             return cls(int(label))
         key = str(label).strip().lower()
         mapping = {
-            "forward": cls.FORWARD, "reverse": cls.REVERSE,
-            "both": cls.BOTH, "ida": cls.FORWARD, "volta": cls.REVERSE,
-            "0": cls.REVERSE, "1": cls.FORWARD, "2": cls.BOTH,
+            "inbound": cls.FORWARD,
+            "ida": cls.FORWARD,
+            "outbound": cls.REVERSE,
+            "volta": cls.REVERSE,
+            "both": cls.BOTH,
+            "0": cls.REVERSE,
+            "1": cls.FORWARD,
+            "2": cls.BOTH,
         }
         if key in mapping:
             return mapping[key]
         raise ValueError(
-            f"Invalid direction '{label}'. "
-            f"Expected: 0/1/2, ida/volta/both, forward/reverse."
+            f"Invalid direction '{label}'. " f"Expected: 0/1/2, inbound/outbound/both."
         )
 
 
 # ── Service pattern ──────────────────────────────────────────────────
+
 
 def parse_service_pattern(pattern: str) -> tuple[tuple[int, ...], bool]:
     """
@@ -57,36 +62,70 @@ def parse_service_pattern(pattern: str) -> tuple[tuple[int, ...], bool]:
     if key in cs.SERVICE_PATTERNS:
         return cs.SERVICE_PATTERNS[key]
 
-    if len(key) == 7 and all(c in "01" for c in key):
+    # TODO: Below is legacy and will likely be removed once we fully switch to
+    # service profiles, but it can stay for now since it's not harmful
+    # and allows some flexibility in user input.
+    if len(key) == 7 and set(key).issubset({"0", "1"}):
         return tuple(int(c) for c in key), False
 
-    day_abbrevs = {d[:3]: i for i, d in enumerate(cs.WEEKDAYS)}
-    parts = [p.strip().lower()[:3] for p in pattern.split(",")]
-    if all(p in day_abbrevs for p in parts):
-        bits = [0] * 7
-        for p in parts:
-            bits[day_abbrevs[p]] = 1
-        return tuple(bits), False
+    # Comma-separated days (e.g., "mon, wed, fri")
+    valid_days = {day[:3].upper() for day in cs.WEEKDAYS}
+    user_days = {p.strip()[:3] for p in key.split(",")}
+
+    if user_days.issubset(valid_days):
+        bits = tuple(1 if day[:3].upper() in user_days else 0 for day in cs.WEEKDAYS)
+        return bits, False
 
     raise ValueError(
         f"Invalid service_pattern '{pattern}'. "
-        f"Use: {', '.join(cs.SERVICE_PATTERNS)}, "
-        f"a 7-digit bitstring, or comma-separated day names."
+        f"Expected predefined key ({', '.join(cs.SERVICE_PATTERNS)}), "
+        "a 7-digit bitstring, or comma-separated days."
     )
+
+
+# TODO: incorporate this on pipeflow side and use it to infer holiday behavior in the absence of a holidays table
+def holiday_action_from_pattern(pattern: str) -> str:
+    """
+    Map a service pattern to holiday behavior.
+
+    Returns:
+        "add"    -> service is ADDED on holidays
+        "remove" -> service is REMOVED on holidays
+        "none"   -> holidays do not alter the weekly pattern
+    """
+    key = str(pattern).strip().upper()
+
+    if key in {"DOM", "FER"}:
+        return "add"
+
+    if key in {"DU", "SAB", "DU_SAB"}:
+        return "remove"
+
+    if key == "TODOS":
+        return "none"
+
+    # conservative default for custom bitstrings / day lists
+    return "none"
 
 
 # ── ID helpers ───────────────────────────────────────────────────────
 
-def make_shape_id(route_short_name: str | int, direction: int | str) -> str:
+
+def _make_shape_ids(df: pd.DataFrame) -> pd.DataFrame:
     """
     Generate a shape_id from route name and direction.
 
     Any hyphens in the route name are replaced with underscores to
     keep ``cs.SEP`` unambiguous in compound IDs.
     """
-    name = str(route_short_name).replace(cs.SEP, "_")
-    d = Direction.from_label(direction) if not isinstance(direction, int) else direction
-    return f"{name}{cs.SEP}{d}"
+    clean_short_name = (
+        df["route_short_name"].astype(str).str.replace(cs.SEP, "_", regex=False)
+    )
+
+    return df.assign(
+        route_short_name=clean_short_name,
+        shape_id=clean_short_name + cs.SEP + df["direction"].astype(str),
+    )
 
 
 def make_route_id(route_short_name: str | int) -> str:
@@ -96,29 +135,37 @@ def make_route_id(route_short_name: str | int) -> str:
 
 # ── TripKey ──────────────────────────────────────────────────────────
 
+
 class TripKey(NamedTuple):
     route_id: str
-    service_window_id: str
+    service_profile_id: str
     start_time: str
     direction: int
     sequence: int
 
     def to_trip_id(self) -> str:
-        return cs.SEP.join([
-            "t", self.route_id, self.service_window_id,
-            self.start_time, str(self.direction), str(self.sequence),
-        ])
+        return cs.SEP.join(
+            [
+                "t",
+                self.route_id,
+                self.service_profile_id,
+                self.start_time,
+                str(self.direction),
+                str(self.sequence),
+            ]
+        )
 
     @classmethod
     def from_trip_id(cls, trip_id: str) -> TripKey:
         parts = trip_id.split(cs.SEP)
         if len(parts) != 6 or parts[0] != "t":
             raise ValueError(f"Malformed trip_id: '{trip_id}'")
-        _, route, window, start, direction, seq = parts
-        return cls(route, window, start, int(direction), int(seq))
+        _, route, profile, start, direction, seq = parts
+        return cls(route, profile, start, int(direction), int(seq))
 
 
 # ── ProtoFeed ────────────────────────────────────────────────────────
+
 
 @dataclass
 class ProtoFeed:
@@ -126,15 +173,15 @@ class ProtoFeed:
     Intermediate representation between user input and GTFS output.
 
     Internal schema (normalised regardless of input format):
-    - ``service_windows``: service_window_id, start_time, end_time,
+    - ``service_profiles``: service_profile_id, start_time, end_time,
       monday–sunday, holiday.
     - ``frequencies``: route_short_name, route_long_name, route_type,
-      service_window_id, shape_id, direction, frequency, schedule_type,
+      service_profile_id, shape_id, direction, frequency, schedule_type,
       [speed, travel_time_mins, headway_mins].
     """
 
     meta: pd.DataFrame
-    service_windows: pd.DataFrame
+    service_profiles: pd.DataFrame
     shapes: gpd.GeoDataFrame
     frequencies: pd.DataFrame
     stops: pd.DataFrame | None = None
@@ -152,14 +199,15 @@ class ProtoFeed:
         df = self.frequencies.copy()
         if "speed" not in df.columns:
             df["speed"] = np.nan
-        df["speed"] = df["speed"].fillna(
-            df["route_type"].map(cs.SPEED_BY_ROUTE_TYPE)
-        )
+        df["speed"] = df["speed"].fillna(df["route_type"].map(cs.SPEED_BY_ROUTE_TYPE))
         df["direction"] = df["direction"].map(Direction.from_label).astype(int)
         if "schedule_type" not in df.columns:
             df["schedule_type"] = cs.SCHEDULE_HEADWAY
         df["schedule_type"] = (
-            df["schedule_type"].astype(str).str.strip().str.lower()
+            df["schedule_type"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
             .fillna(cs.SCHEDULE_HEADWAY)
         )
         return df
@@ -167,8 +215,7 @@ class ProtoFeed:
     @cached_property
     def shapes_extra(self) -> dict[str, int]:
         return (
-            self.resolved_frequencies
-            .groupby("shape_id")["direction"]
+            self.resolved_frequencies.groupby("shape_id")["direction"]
             .agg(lambda d: 2 if d.nunique() > 1 or 2 in d.values else d.iloc[0])
             .to_dict()
         )
@@ -181,23 +228,29 @@ class ProtoFeed:
     @cached_property
     def resolved_speed_zones(self) -> gpd.GeoDataFrame:
         if self.speed_zones is None:
-            return pd.concat([
-                self.service_area.assign(
-                    route_type=rt,
-                    speed_zone_id=f"default{cs.SEP}{rt}",
-                    speed=np.inf,
-                )
-                for rt in self.resolved_frequencies["route_type"].unique()
-            ], ignore_index=True)
+            return pd.concat(
+                [
+                    self.service_area.assign(
+                        route_type=rt,
+                        speed_zone_id=f"default{cs.SEP}{rt}",
+                        speed=np.inf,
+                    )
+                    for rt in self.resolved_frequencies["route_type"].unique()
+                ],
+                ignore_index=True,
+            )
 
         def _clean(group):
             rt = group["route_type"].iloc[0]
             return _clean_speed_zones(
-                group, self.service_area, f"default{cs.SEP}{rt}",
+                group,
+                self.service_area,
+                f"default{cs.SEP}{rt}",
             )
+
         return (
-            self.speed_zones
-            .groupby("route_type", group_keys=False).apply(_clean)
+            self.speed_zones.groupby("route_type", group_keys=False)
+            .apply(_clean)
             .filter(["route_type", "speed_zone_id", "speed", "geometry"])
         )
 

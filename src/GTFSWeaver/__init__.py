@@ -1,29 +1,53 @@
-"""
-make_gtfs — Build GTFS feeds from basic route information.
+"""gtfsweaver — build GTFS feeds from basic route information.
 
-    from make_gtfs import read_protofeed_from_excel, build_feed
+Example
+-------
+    from gtfsweaver import build_feed, read_protofeed
 
-    pfeed = read_protofeed_from_excel(
-        "operacional.xlsx",         # agency + routes + holidays sheets
-        "itinerarios.gpkg",         # route LineStrings with route_short_name + direction
-        stops_geo_path="paradas.shp",
+    pfeed = read_protofeed(
+        xlsx_path="operacional.xlsx",
+        routes_geo_path="itinerarios.gpkg",
+        stops_geo_path="paradas.gpkg",
     )
     feed = build_feed(pfeed, speed_mode="proportional")
     feed.write("gtfs.zip")
 """
 
-from .models import (
-    Direction, ProtoFeed, TripKey,
-    make_shape_id, make_route_id, parse_service_pattern,
-)
-from .readers import read_protofeed, read_protofeed_from_excel, read_geo_file
-from .builders import build_feed
+from __future__ import annotations
 
-__version__ = "1.0.0"
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
+from .builders import build_feed
+from .models import (
+    Direction,
+    ProtoFeed,
+    TripKey,
+    holiday_action_from_pattern,
+    make_route_id,
+    parse_service_pattern,
+)
+from .qa import build_quality_report
+from .readers import read_geo_file, read_protofeed
+from .time_utils import duration_seconds, format_gtfs_time, parse_gtfs_time
+
+try:
+    __version__ = _pkg_version("gtfsweaver")
+except PackageNotFoundError:
+    __version__ = "0.1.0"
 
 __all__ = [
-    "Direction", "ProtoFeed", "TripKey",
-    "make_shape_id", "make_route_id", "parse_service_pattern",
-    "read_protofeed", "read_protofeed_from_excel", "read_geo_file",
+    "Direction",
+    "ProtoFeed",
+    "TripKey",
     "build_feed",
+    "build_quality_report",
+    "duration_seconds",
+    "format_gtfs_time",
+    "holiday_action_from_pattern",
+    "make_route_id",
+    "parse_gtfs_time",
+    "parse_service_pattern",
+    "read_geo_file",
+    "read_protofeed",
 ]
