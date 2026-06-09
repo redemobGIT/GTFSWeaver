@@ -5,6 +5,8 @@ Domain models: ProtoFeed, Direction, and identity generators.
 from __future__ import annotations
 
 import hashlib
+import re
+import unicodedata
 from dataclasses import dataclass
 from enum import IntEnum
 from functools import cached_property
@@ -84,7 +86,7 @@ class ProtoFeed:
                 [
                     self.service_area.assign(
                         route_type=rt,
-                        speed_zone_id=f"default{cs.SEP}{rt}",
+                        speed_zone_id=f"default_{rt}",
                         speed=np.inf,
                     )
                     for rt in self.resolved_frequencies["route_type"].unique()
@@ -97,7 +99,7 @@ class ProtoFeed:
             return _clean_speed_zones(
                 group,
                 self.service_area,
-                f"default{cs.SEP}{rt}",
+                f"default_{rt}",
             )
 
         return (
@@ -160,9 +162,26 @@ class Direction(IntEnum):
 # ── Identity Generators ──────────────────────────────────────────────
 
 
+def _make_slug(text: str | int) -> str:
+    """
+    Convert arbitrary text into a strict ASCII, lowercase alphanumeric slug.
+
+    Transforms messy inputs like "Linha 101 - Rápido!" into "linha_101_rapido".
+    """
+    raw = str(text).strip().lower()
+    # Normalize Unicode to separate accents from base characters, then drop non-ASCII
+    ascii_text = (
+        unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    )
+    # Replace anything that isn't a lowercase letter or number with an underscore
+    slug = re.sub(r"[^a-z0-9]+", "_", ascii_text)
+
+    return slug.strip("_")
+
+
 def make_route_id(route_short_name: str | int) -> str:
-    """Generate a route_id, sanitised for use in compound IDs."""
-    return "r" + str(route_short_name).replace(cs.SEP, "_")
+    """Generate a clean, URL-safe route_id."""
+    return f"r_{_make_slug(route_short_name)}"
 
 
 def make_service_profile_id(
@@ -224,8 +243,7 @@ def parse_service_pattern(pattern: str) -> tuple[tuple[int, ...], bool]:
     )
 
 
-# TODO: incorporate this on pipeflow side and use it to infer holiday behavior
-# in the absence of a holidays table
+# TODO: incorporate this on pipeflow side and use it to infer holiday behavior in the absence of a holidays table
 def holiday_action_from_pattern(pattern: str) -> str:
     """
     Map a service pattern to holiday behavior.
@@ -253,20 +271,16 @@ def holiday_action_from_pattern(pattern: str) -> str:
 # ── Private Internal Helpers ─────────────────────────────────────────
 
 
-def make_shape_ids(df: pd.DataFrame) -> pd.DataFrame:
+def _make_shape_ids(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Generate a shape_id from route name and direction.
-
-    Any hyphens in the route name are replaced with underscores to
-    keep ``cs.SEP`` unambiguous in compound IDs.
+    Generate a shape_id from the route name and direction.
     """
-    clean_short_name = (
-        df["route_short_name"].astype(str).str.replace(cs.SEP, "_", regex=False)
-    )
+    # Apply the strict slugifier to guarantee downstream engine compatibility
+    clean_names = df["route_short_name"].apply(_make_slug)
 
     return df.assign(
-        route_short_name=clean_short_name,
-        shape_id=clean_short_name + cs.SEP + df["direction"].astype(str),
+        route_short_name=clean_names,
+        shape_id=clean_names + "_" + df["direction"].astype(str),
     )
 
 
