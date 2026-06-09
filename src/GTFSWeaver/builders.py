@@ -248,9 +248,9 @@ def build_shapes(pfeed: ProtoFeed) -> pd.DataFrame:
     """Build shapes.txt from final ProtoFeed shape geometries."""
     rows: list[list[object]] = []
 
-    for shape_id, geometry in pfeed.shapes[
-        ["shape_id", "geometry"]
-    ].itertuples(index=False):
+    for shape_id, geometry in pfeed.shapes[["shape_id", "geometry"]].itertuples(
+        index=False
+    ):
         rows.extend(_iter_shape_rows(shape_id, list(geometry.coords)))
 
     return pd.DataFrame(

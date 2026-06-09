@@ -85,9 +85,7 @@ def make_stop_points(
         suffixes = gk.make_ids(len(points), prefix="")
         frame = gpd.GeoDataFrame(
             {
-                "point_id": [
-                    f"{line_id}_{suffix}" for suffix in suffixes
-                ],
+                "point_id": [f"{line_id}_{suffix}" for suffix in suffixes],
                 id_col: line_id,
                 "shape_dist_traveled": distances,
             },
@@ -305,7 +303,7 @@ def get_stops_nearby(
 
 def _coalesce_projected_stops(
     projected: gpd.GeoDataFrame,
-    distance_tolerance: float = 5.0, # TODO: consider this
+    distance_tolerance: float = 5.0,  # TODO: consider this
 ) -> gpd.GeoDataFrame:
     """
     Collapse stops whose projected positions along the shape are effectively

@@ -63,10 +63,7 @@ SCHEMA_SERVICE_PROFILES = pa.DataFrameSchema(
             required=False,
         ),
         "service_pattern": pa.Column(str, pa.Check.str_matches(_NONBLANK)),
-        **{
-            day: pa.Column(int, pa.Check.isin(range(2)))
-            for day in cs.WEEKDAYS
-        },
+        **{day: pa.Column(int, pa.Check.isin(range(2))) for day in cs.WEEKDAYS},
         "holiday": pa.Column(
             int,
             pa.Check.isin(range(2)),
@@ -325,8 +322,7 @@ def _check_date_range_order(agency_df: pd.DataFrame) -> None:
     end_date = str(agency_df["end_date"].iat[0])
     if start_date > end_date:
         raise ValueError(
-            "agency sheet has start_date after end_date: "
-            f"{start_date} > {end_date}"
+            "agency sheet has start_date after end_date: " f"{start_date} > {end_date}"
         )
 
 
@@ -344,8 +340,7 @@ def _check_headway_completeness(routes_df: pd.DataFrame) -> None:
     bad_end = headway.loc[headway["end_time"].isna()]
     if not bad_end.empty:
         raise ValueError(
-            "Headway rows missing 'end_time' at index: "
-            f"{bad_end.index.tolist()}"
+            "Headway rows missing 'end_time' at index: " f"{bad_end.index.tolist()}"
         )
 
     if "headway_mins" not in headway.columns:
@@ -365,9 +360,7 @@ def _check_headway_completeness(routes_df: pd.DataFrame) -> None:
 
 def _check_fixed_rows_have_travel_time(routes_df: pd.DataFrame) -> None:
     """Ensure fixed rows carry trip-level travel times."""
-    fixed = routes_df.loc[
-        routes_df["schedule_type"].str.lower() == cs.SCHEDULE_FIXED
-    ]
+    fixed = routes_df.loc[routes_df["schedule_type"].str.lower() == cs.SCHEDULE_FIXED]
     if fixed.empty:
         return
 
@@ -381,8 +374,7 @@ def _check_fixed_rows_have_travel_time(routes_df: pd.DataFrame) -> None:
     bad = fixed.loc[travel_time.isna() | travel_time.le(0)]
     if not bad.empty:
         raise ValueError(
-            "Fixed rows invalid 'travel_time_mins' at index: "
-            f"{bad.index.tolist()}"
+            "Fixed rows invalid 'travel_time_mins' at index: " f"{bad.index.tolist()}"
         )
 
 
@@ -445,10 +437,7 @@ def _check_route_direction_coverage(
 
     missing = route_pairs - shape_pairs
     if missing:
-        formatted = [
-            f"({route}, dir={direction})"
-            for route, direction in missing
-        ]
+        formatted = [f"({route}, dir={direction})" for route, direction in missing]
         raise ValueError(
             "Routes in Excel not covered by routes geo file: "
             f"{', '.join(sorted(formatted))}"
@@ -465,8 +454,7 @@ def _check_routes_geo(shapes_gdf: gpd.GeoDataFrame) -> None:
     if not bad_geom.empty:
         found = bad_geom.geometry.geom_type.unique().tolist()
         raise ValueError(
-            "Routes geo file must contain only LineStrings. "
-            f"Found: {found}"
+            "Routes geo file must contain only LineStrings. " f"Found: {found}"
         )
 
     bad_valid = shapes_gdf.loc[~shapes_gdf.geometry.is_valid]
@@ -503,8 +491,7 @@ def _check_stops_geo(stops_gdf: gpd.GeoDataFrame) -> None:
     if stop_id.duplicated().any():
         duplicated = stop_id.loc[stop_id.duplicated()].unique().tolist()
         raise ValueError(
-            "Stops geo file contains duplicated stop_id values: "
-            f"{duplicated[:10]}"
+            "Stops geo file contains duplicated stop_id values: " f"{duplicated[:10]}"
         )
 
     stop_name = stops_gdf["stop_name"].astype("string").str.strip()
@@ -524,14 +511,12 @@ def _check_holidays_within_feed_range(
     end_date = str(agency_df["end_date"].iat[0])
 
     bad = holidays_df.loc[
-        (holidays_df["date"] < start_date)
-        | (holidays_df["date"] > end_date)
+        (holidays_df["date"] < start_date) | (holidays_df["date"] > end_date)
     ]
     if not bad.empty:
         dates = bad["date"].tolist()[:10]
         raise ValueError(
-            "Some holiday dates fall outside the feed date range: "
-            f"{dates}"
+            "Some holiday dates fall outside the feed date range: " f"{dates}"
         )
 
 

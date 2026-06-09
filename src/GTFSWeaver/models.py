@@ -206,9 +206,7 @@ def make_service_profile_id(
     """
     raw_parts = [schedule_type, start_time, end_time, pattern]
     clean_parts = [
-        str(part).strip()
-        for part in raw_parts
-        if pd.notna(part) and part != ""
+        str(part).strip() for part in raw_parts if pd.notna(part) and part != ""
     ]
 
     signature = "|".join(clean_parts)

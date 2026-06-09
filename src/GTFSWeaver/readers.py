@@ -316,11 +316,7 @@ def _prepare_routes_data(routes_df: pd.DataFrame) -> pd.DataFrame:
 
     df = _infer_schedule_type(df)
 
-    df["service_pattern"] = (
-        df["service_pattern"]
-        .astype("string")
-        .str.upper()
-    )
+    df["service_pattern"] = df["service_pattern"].astype("string").str.upper()
 
     df = make_shape_ids(df)
 
@@ -352,17 +348,11 @@ def _excel_to_service_profiles(clean_routes: pd.DataFrame) -> pd.DataFrame:
         "service_pattern",
     ]
 
-    profiles = (
-        clean_routes[profile_cols]
-        .drop_duplicates()
-        .reset_index(drop=True)
-    )
+    profiles = clean_routes[profile_cols].drop_duplicates().reset_index(drop=True)
 
     duplicated = profiles["service_profile_id"].duplicated(keep=False)
     if duplicated.any():
-        collisions = profiles.loc[duplicated].sort_values(
-            "service_profile_id"
-        )
+        collisions = profiles.loc[duplicated].sort_values("service_profile_id")
         raise ValueError(
             "service_profile_id collision across distinct profiles. "
             "Increase the hash length or inspect schedule fields:\n"
@@ -379,11 +369,7 @@ def _excel_to_service_profiles(clean_routes: pd.DataFrame) -> pd.DataFrame:
     profiles = pd.concat([profiles, weekdays], axis="columns")
     profiles["holiday"] = parsed.str[1].astype(int)
 
-    return profiles[
-        profile_cols
-        + list(cs.WEEKDAYS)
-        + ["holiday"]
-    ]
+    return profiles[profile_cols + list(cs.WEEKDAYS) + ["holiday"]]
 
 
 def _excel_to_trip_blueprints(
@@ -393,9 +379,8 @@ def _excel_to_trip_blueprints(
     """Convert prepared route rows into the master trip blueprint table."""
     out = clean_routes.copy()
 
-    missing_profiles = (
-        set(out["service_profile_id"])
-        - set(service_profiles["service_profile_id"])
+    missing_profiles = set(out["service_profile_id"]) - set(
+        service_profiles["service_profile_id"]
     )
     if missing_profiles:
         raise ValueError(
@@ -759,8 +744,7 @@ def _shape_table_from_gdf(shapes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     if duplicated.any():
         duplicates = result.loc[duplicated, "shape_id"].unique().tolist()
         raise ValueError(
-            "Routes geo file produces duplicated shape_id values: "
-            f"{duplicates[:10]}"
+            "Routes geo file produces duplicated shape_id values: " f"{duplicates[:10]}"
         )
 
     return result
@@ -769,9 +753,7 @@ def _shape_table_from_gdf(shapes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 def _reverse_linestring(line: sg.LineString) -> sg.LineString:
     """Return a reversed LineString."""
     if not isinstance(line, sg.LineString):
-        raise TypeError(
-            "Routes geo file must contain only LineString geometries."
-        )
+        raise TypeError("Routes geo file must contain only LineString geometries.")
 
     return sg.LineString(list(line.coords)[::-1])
 
