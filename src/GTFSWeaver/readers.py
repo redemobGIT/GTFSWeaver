@@ -37,8 +37,7 @@ from . import constants as cs
 from .models import (
     Direction,
     ProtoFeed,
-    make_shape_id,
-    make_shape_ids,
+    create_shape_id_label,
     make_route_id,
     make_service_profile_id,
     parse_service_pattern,
@@ -242,7 +241,6 @@ def _build_protofeed_tables(
     holidays_df: pd.DataFrame | None,
     boundary: gpd.GeoDataFrame | None,
 ) -> ProtoFeedTables:
-
     meta = agency_df[
         [
             "agency_name",
@@ -257,6 +255,10 @@ def _build_protofeed_tables(
     frequencies = _excel_to_trip_blueprints(routes_df, service_profiles)
 
     shapes = _shape_table_from_gdf(shapes_gdf)
+
+    used_shape_ids = set(frequencies["shape_id"])
+    shapes = shapes.loc[shapes["shape_id"].isin(used_shape_ids)].copy()
+
     stops = _stops_gdf_to_table(stops_gdf) if stops_gdf is not None else None
 
     return {
@@ -314,11 +316,11 @@ def _prepare_routes_data(routes_df: pd.DataFrame) -> pd.DataFrame:
     """Prepare normalized route rows for ProtoFeed construction."""
     df = routes_df.copy()
 
+    df["direction"] = df["direction"].map(Direction.from_label).astype(int)
+
     df = _infer_schedule_type(df)
 
     df["service_pattern"] = df["service_pattern"].astype("string").str.upper()
-
-    df = make_shape_ids(df)
 
     df["service_profile_id"] = df.apply(
         _make_service_profile_id_from_row,
@@ -378,6 +380,11 @@ def _excel_to_trip_blueprints(
 ) -> pd.DataFrame:
     """Convert prepared route rows into the master trip blueprint table."""
     out = clean_routes.copy()
+
+    out["shape_id"] = [
+        create_shape_id_label(route, direction)
+        for route, direction in zip(out["route_short_name"], out["direction"])
+    ]
 
     missing_profiles = set(out["service_profile_id"]) - set(
         service_profiles["service_profile_id"]
@@ -722,7 +729,7 @@ def _shape_table_from_gdf(shapes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
             ):
                 out = row.copy()
                 out["direction"] = int(expanded_direction)
-                out["shape_id"] = make_shape_id(
+                out["shape_id"] = create_shape_id_label(
                     row["route_short_name"],
                     int(expanded_direction),
                 )
@@ -731,7 +738,7 @@ def _shape_table_from_gdf(shapes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         else:
             out = row.copy()
             out["direction"] = int(direction)
-            out["shape_id"] = make_shape_id(
+            out["shape_id"] = create_shape_id_label(
                 row["route_short_name"],
                 int(direction),
             )

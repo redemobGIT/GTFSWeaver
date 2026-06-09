@@ -181,6 +181,10 @@ def build_calendar(
         holiday_action_from_pattern
     )
 
+    #  Many service_profile_ids (which encode time-window + pattern) intentionally
+    # collapse to one calendar service_id (which encodes only
+    # weekday-pattern + holiday action), and that build_trips maps through
+    # profile_to_service to stay consistent.
     def make_service_id(bits: tuple[int, ...], action: str) -> str:
         bit_str = "".join(str(bit) for bit in bits)
         return f"srv{bit_str}_{action}"
@@ -236,10 +240,9 @@ def build_routes(pfeed: ProtoFeed) -> pd.DataFrame:
     """Build ``routes.txt``."""
     routes = (
         pfeed.resolved_frequencies.filter(
-            ["route_short_name", "route_long_name", "route_type"]
+            ["route_id", "route_short_name", "route_long_name", "route_type"]
         )
         .drop_duplicates()
-        .assign(route_id=lambda df: df["route_short_name"].map(make_route_id))
     )
     return routes[["route_id", "route_short_name", "route_long_name", "route_type"]]
 
@@ -316,9 +319,6 @@ def build_trips(
 ) -> pd.DataFrame:
     """Build trips.txt."""
     resolved = pfeed.resolved_frequencies.copy()
-
-    if "route_id" not in resolved.columns:
-        resolved["route_id"] = resolved["route_short_name"].map(make_route_id)
 
     valid_route_ids = set(routes["route_id"])
     route_freq = resolved.loc[resolved["route_id"].isin(valid_route_ids)]
@@ -523,7 +523,7 @@ def build_stop_times(
     trip_expanded = trips_for_merge.merge(
         frequencies.drop(columns=["shape_id"], errors="ignore"),
         on=["route_id", "service_profile_id", "direction"],
-        how="left",
+        how="inner",
         suffixes=("_trip", ""),
     )
 
@@ -686,9 +686,6 @@ def build_frequencies(
 ) -> pd.DataFrame | None:
     """Build ``frequencies.txt`` for headway-based rows only."""
     frequencies = pfeed.resolved_frequencies.copy()
-
-    if "route_id" not in frequencies.columns:
-        frequencies["route_id"] = frequencies["route_short_name"].map(make_route_id)
 
     service_profiles = pfeed.service_profiles[
         ["service_profile_id", "start_time", "end_time"]

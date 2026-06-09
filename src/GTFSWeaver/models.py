@@ -54,7 +54,6 @@ class ProtoFeed:
         if "speed" not in df.columns:
             df["speed"] = np.nan
         df["speed"] = df["speed"].fillna(df["route_type"].map(cs.SPEED_BY_ROUTE_TYPE))
-        df["direction"] = df["direction"].map(Direction.from_label).astype(int)
         if "schedule_type" not in df.columns:
             df["schedule_type"] = cs.SCHEDULE_HEADWAY
         df["schedule_type"] = (
@@ -289,7 +288,7 @@ def holiday_action_from_pattern(pattern: str) -> str:
 # ── Private Internal Helpers ─────────────────────────────────────────
 
 
-def _create_shape_id_label(route_short_name: str | int, direction: str | int) -> str:
+def create_shape_id_label(route_short_name: str | int, direction: str | int) -> str:
     """Generate the final directional shape_id used inside ProtoFeed."""
     parsed = Direction.from_label(direction)
 
@@ -300,22 +299,6 @@ def _create_shape_id_label(route_short_name: str | int, direction: str | int) ->
         )
 
     return f"sh_{_make_slug(route_short_name)}_{int(parsed)}"
-
-
-def make_shape_ids(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add normalized direction and final shape_id.
-
-    Does not mutate route_short_name, because route_short_name is a public
-    display field in GTFS.
-    """
-    out = df.copy()
-    out["direction"] = out["direction"].map(Direction.from_label).astype(int)
-    out["shape_id"] = [
-        _create_shape_id_label(route, direction)
-        for route, direction in zip(out["route_short_name"], out["direction"])
-    ]
-    return out
 
 
 def _clean_speed_zones(
